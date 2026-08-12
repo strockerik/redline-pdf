@@ -6,7 +6,7 @@ Bluebeam features worth having on a phone and in a dock icon.
 Everything runs on your device. Nothing is uploaded, there is no backend,
 and it works with no network connection once installed.
 
-**Live:** https://strockerik.github.io/redline/
+**Live:** https://strockerik.github.io/redline-pdf/
 
 ---
 
@@ -127,5 +127,5 @@ Push to `main`; GitHub Pages serves the repo root. Bump `CACHE` in
 `sw.js` on every deploy or the service worker will keep serving the old
 version.
 
-All paths are relative (`./`) because Pages serves from `/redline/`, not
+All paths are relative (`./`) because Pages serves from `/redline-pdf/`, not
 the domain root.
