@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=5.0">
+<meta name="theme-color" content="#152230">
+<meta name="description" content="Assemble and mark up PDFs. Runs entirely on your device.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Redline">
+<title>Redline — PDF Markup</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icons/favicon.png" type="image/png">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+
+<div id="app">
+  <header>
+    <div class="brand">
+      <span class="mark">REDLINE</span>
+      <span class="sub">pdf markup</span>
+    </div>
+
+    <div class="doc-id">
+      <span id="dirtyDot" class="dirty-dot" title="Unsaved changes" style="display:none"></span>
+      <span id="docTitle">Untitled.pdf</span>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="hdr-group">
+      <button id="btnOpen" title="Open a PDF (⌘O)">Open</button>
+      <button id="btnSave" class="primary" title="Save over the file you opened (⌘S)">Save</button>
+      <button id="btnSaveAs" title="Save to a new file (⇧⌘S)">Save As…</button>
+      <button id="btnDownload" class="primary" title="Download the edited PDF">⬇ Download</button>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="hdr-group">
+      <button id="btnAddBlank" title="Insert a blank page after the current page">＋ Blank</button>
+      <select id="blankSizeSelect" title="Blank page size" aria-label="Blank page size">
+        <option value="Letter">Letter</option>
+        <option value="Legal">Legal</option>
+        <option value="A4">A4</option>
+        <option value="Tabloid">Tabloid</option>
+      </select>
+      <input type="text" id="filenameInput" value="document.pdf" title="Filename used when downloading or saving as" aria-label="Output filename">
+    </div>
+
+    <div class="divider"></div>
+    <button id="btnClearAll" class="danger-ghost" title="Remove all pages and start over">Clear All</button>
+
+    <div id="statusMsg" role="status" aria-live="polite"></div>
+  </header>
+
+  <div id="body">
+    <aside id="sidebar">
+      <div class="sidebar-head">
+        <span class="sidebar-title">Pages</span>
+        <span id="pageCountLabel" class="sidebar-count"></span>
+      </div>
+      <div id="thumbList"></div>
+      <div class="empty-hint" id="sidebarEmptyHint">
+        No pages yet. Open a PDF, drag one onto the window, or add a blank page.
+      </div>
+    </aside>
+    <div id="drawerScrim"></div>
+
+    <div id="editorArea">
+      <div id="pageToolbar">
+        <div class="grp mobile-only">
+          <button id="btnPages" aria-expanded="false" title="Show page thumbnails">☰ Pages</button>
+        </div>
+        <div class="grp">
+          <button id="btnRotateCCW" class="icon-only" title="Rotate page counter-clockwise" aria-label="Rotate counter-clockwise">⟲</button>
+          <button id="btnRotateCW" class="icon-only" title="Rotate page clockwise" aria-label="Rotate clockwise">⟳</button>
+          <button id="btnDeletePage" class="danger-ghost" title="Delete this page">Delete Page</button>
+        </div>
+        <div class="grp">
+          <button id="toolText" title="Drop a text box on the page (T)">Text Box</button>
+          <button id="toolCallout" title="Point at something, then place the note (L)">Text + Leader</button>
+        </div>
+        <div class="grp">
+          <label for="fontSizeSelect">Size</label>
+          <select id="fontSizeSelect" aria-label="Font size">
+            <option>9</option><option>10</option><option>12</option>
+            <option>14</option><option>18</option><option>24</option>
+          </select>
+        </div>
+        <div class="grp" id="colorGrp">
+          <label aria-hidden="true">Color</label>
+        </div>
+        <div class="grp">
+          <button id="btnDeleteAnno" class="danger-ghost" disabled title="Delete the selected note">Delete Note</button>
+        </div>
+        <div class="grp zoom-grp">
+          <button id="btnZoomOut" class="icon-only" title="Zoom out (⌘−)" aria-label="Zoom out">−</button>
+          <button id="zoomReadout" class="readout" title="Reset to 100%">100%</button>
+          <button id="btnZoomIn" class="icon-only" title="Zoom in (⌘+)" aria-label="Zoom in">＋</button>
+          <button id="btnFitWidth" title="Fit width (⌘0)">Fit W</button>
+          <button id="btnFitPage" title="Fit page (⌘9)">Fit Pg</button>
+        </div>
+      </div>
+
+      <div id="canvasStage">
+        <div id="emptyState">
+          <h2>DRAWING SHEET — BLANK</h2>
+          <p>
+            Open a PDF, drag one onto this window, or add a blank page from the toolbar.<br>
+            Everything happens on this device — nothing is uploaded anywhere.
+          </p>
+        </div>
+        <div id="pageStack" style="display:none;">
+          <canvas id="pageCanvas"></canvas>
+          <div id="annoLayer">
+            <svg id="leaderSvg" aria-hidden="true"></svg>
+          </div>
+        </div>
+      </div>
+
+      <div id="footerNote">
+        Runs entirely on this device · nothing uploads · work is saved automatically to this browser
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="placeHint" role="status"></div>
+
+<div id="dropOverlay">
+  <div class="drop-card">Drop a PDF to open it</div>
+</div>
+
+<div id="updateBanner">
+  A new version of Redline is available.
+  <button id="btnReload">Reload</button>
+</div>
+
+<input type="file" id="fileInput" accept="application/pdf,.pdf" multiple hidden>
+
+<!-- Vendored, pinned, and precached so the installed app works offline.
+     These stay classic scripts (globals PDFLib / pdfjsLib); only our own
+     code is modules. -->
+<script src="./vendor/pdf-lib.min.js"></script>
+<script src="./vendor/pdf.min.js"></script>
+<script type="module" src="./js/main.js"></script>
+</body>
+</html>
