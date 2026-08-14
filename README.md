@@ -57,7 +57,8 @@ sheet, and saving downloads to the Files app.
 | Esc | Cancel tool, deselect |
 | Delete | Delete selected note |
 | ← → ↑ ↓ | Previous / next page |
-| Space + drag | Pan |
+| drag | Pan the page (default) |
+| Space + drag | Pan without leaving the current tool |
 
 `L` still works as an alias for `Q`.
 

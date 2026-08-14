@@ -296,7 +296,11 @@ export function installStageGestures(onPageStep) {
   stage.addEventListener('pointerup', endPinch);
   stage.addEventListener('pointercancel', endPinch);
 
-  // --- Space-drag to pan ---
+  // --- Drag to pan ---
+  // Pan is the default: with no placement tool active, dragging the page
+  // moves it, the way every PDF viewer behaves. Holding Space pans even
+  // while a tool is active, so a note can be placed off-screen without
+  // putting the tool away first.
   let spaceDown = false;
   let panning = null;
   window.addEventListener('keydown', (e) => {
@@ -309,20 +313,57 @@ export function installStageGestures(onPageStep) {
   window.addEventListener('keyup', (e) => {
     if (e.code === 'Space') { spaceDown = false; stage.classList.remove('pannable'); }
   });
+
+  /** Anything with its own drag gesture keeps it — panning must not
+   *  hijack moving a note, dragging a leader tip, or picking a stroke. */
+  const ownsTheDrag = (target) =>
+    !!(target.closest?.('.anno-box') ||
+       target.classList?.contains('ink-stroke') ||
+       target.classList?.contains('tip-handle'));
+
   stage.addEventListener('pointerdown', (e) => {
-    if (!spaceDown || e.pointerType === 'touch') return;
+    if (e.pointerType === 'touch') return;          // native scroll handles touch
+    if (e.button !== 0) return;
+    if (!spaceDown && state.activeTool !== 'select') return;
+    if (!spaceDown && ownsTheDrag(e.target)) return;
     e.preventDefault();
-    panning = { x: e.clientX, y: e.clientY, sl: stage.scrollLeft, st: stage.scrollTop };
-    stage.setPointerCapture(e.pointerId);
+    panning = {
+      x: e.clientX, y: e.clientY, id: e.pointerId,
+      sl: stage.scrollLeft, st: stage.scrollTop, moved: false,
+    };
   });
   stage.addEventListener('pointermove', (e) => {
     if (!panning) return;
-    stage.scrollLeft = panning.sl - (e.clientX - panning.x);
-    stage.scrollTop = panning.st - (e.clientY - panning.y);
+    const dx = e.clientX - panning.x, dy = e.clientY - panning.y;
+    if (!panning.moved) {
+      if (Math.hypot(dx, dy) <= 3) return;
+      // Capture only once this is genuinely a drag. Capturing on every
+      // press would retarget the click that follows to the stage, and
+      // click-to-deselect on the annotation layer would stop firing.
+      panning.moved = true;
+      stage.classList.add('panning');
+      try { stage.setPointerCapture(panning.id); } catch { /* not capturable */ }
+    }
+    stage.scrollLeft = panning.sl - dx;
+    stage.scrollTop = panning.st - dy;
   });
-  stage.addEventListener('pointerup', (e) => {
-    if (panning) { panning = null; try { stage.releasePointerCapture(e.pointerId); } catch {} }
-  });
+  const endPan = (e) => {
+    if (!panning) return;
+    const dragged = panning.moved;
+    panning = null;
+    stage.classList.remove('panning');
+    try { stage.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+    // A drag ends in a click too. Swallow that one, or panning across the
+    // page would also deselect whatever was selected.
+    if (dragged) {
+      stage.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+      }, { capture: true, once: true });
+    }
+  };
+  stage.addEventListener('pointerup', endPan);
+  stage.addEventListener('pointercancel', endPan);
 }
 
 export function isTypingTarget(el) {

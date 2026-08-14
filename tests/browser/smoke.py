@@ -482,6 +482,47 @@ def main():
         click(ws, "#btnFitWidth")
         time.sleep(0.5)
 
+        # ---------------------------------------------- 6b2. pan
+        print("\n=== pan (default tool) ===")
+        check("stage shows the grab cursor at rest",
+              ev(ws, "getComputedStyle(document.getElementById('canvasStage')).cursor") == "grab")
+        check("the page inherits it",
+              ev(ws, "getComputedStyle(document.getElementById('annoLayer')).cursor") == "grab")
+
+        def stage_point(fx, fy):
+            b = ev(ws, """(() => {
+              const c = document.getElementById('pageCanvas').getBoundingClientRect();
+              const s = document.getElementById('canvasStage').getBoundingClientRect();
+              const l = Math.max(c.left, s.left), r = Math.min(c.right, s.right);
+              const t = Math.max(c.top, s.top), b2 = Math.min(c.bottom, s.bottom);
+              return {l, t, w: r - l, h: b2 - t};
+            })()""")
+            return b["l"] + b["w"] * fx, b["t"] + b["h"] * fy
+
+        # Zoom in so there is somewhere to pan to.
+        click(ws, "#btnZoomIn")
+        time.sleep(0.8)
+        before = ev(ws, "(s=>({l:s.scrollLeft,t:s.scrollTop}))(document.getElementById('canvasStage'))")
+        x0, y0 = stage_point(0.6, 0.6)
+        ws.call("Input.dispatchMouseEvent", {"type": "mousePressed", "x": x0, "y": y0,
+                                             "button": "left", "clickCount": 1})
+        for i in range(1, 7):
+            ws.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x0 - i * 20,
+                                                 "y": y0 - i * 12, "button": "left", "buttons": 1})
+            time.sleep(0.03)
+        mid = ev(ws, "document.getElementById('canvasStage').classList.contains('panning')")
+        cur = ev(ws, "getComputedStyle(document.getElementById('canvasStage')).cursor")
+        ws.call("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": x0 - 120,
+                                             "y": y0 - 72, "button": "left", "buttons": 0,
+                                             "clickCount": 1})
+        time.sleep(0.4)
+        after = ev(ws, "(s=>({l:s.scrollLeft,t:s.scrollTop}))(document.getElementById('canvasStage'))")
+        check("dragging the page pans it", after["l"] > before["l"] or after["t"] > before["t"],
+              f"{before} -> {after}")
+        check("cursor becomes grabbing mid-drag", mid is True and cur == "grabbing", f"{mid}, {cur}")
+        check("pan releases cleanly",
+              ev(ws, "document.getElementById('canvasStage').classList.contains('panning')") is False)
+
         # ---------------------------------------------- 6c. pen
         print("\n=== pen ===")
         TOOLBAR_H = ev(ws, "document.getElementById('pageToolbar').getBoundingClientRect().height")

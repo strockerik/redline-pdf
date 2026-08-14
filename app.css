@@ -267,8 +267,16 @@ select, input[type=text]{
   /* Our own pinch handler owns zoom; the browser's would fight it. */
   touch-action:pan-x pan-y;
 }
-#canvasStage.pannable{ cursor:grab; }
-#canvasStage.pannable:active{ cursor:grabbing; }
+/* Pan is the default tool, so the stage reads as grabbable at rest. The
+   overlay and the page inherit this; a placement tool, a note or a
+   stroke each override it with their own cursor below.
+   While a pan is actually in progress — and while Space is held, which
+   pans regardless of the active tool — the grab cursor has to win over
+   those, hence the descendant rules. */
+#canvasStage{ cursor:grab; }
+#canvasStage.panning, #canvasStage.panning *{ cursor:grabbing; }
+#canvasStage.pannable, #canvasStage.pannable *{ cursor:grab; }
+#canvasStage.pannable:active, #canvasStage.pannable:active *{ cursor:grabbing; }
 
 #emptyState{
   color:var(--muted); text-align:center; margin-top:70px; max-width:430px;
