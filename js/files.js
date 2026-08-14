@@ -27,7 +27,11 @@ export async function openFromHandle(handle, { asPrimary = true } = {}) {
   const file = await handle.getFile();
   const bytes = await file.arrayBuffer();
   const first = await importPdfBytes(bytes, file.name);
-  if (first !== null && asPrimary && !state.fileHandle) {
+  // `combined` is set by the import above the moment a second file lands,
+  // and must not be undone here — this runs once per handle in a
+  // multi-select, so without the guard the second file would re-adopt a
+  // save target for a document that no longer has one.
+  if (first !== null && asPrimary && !state.fileHandle && !state.combined) {
     state.fileHandle = handle;
     state.docName = file.name;
     markDirty(false);

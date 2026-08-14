@@ -67,6 +67,7 @@ function snapshot() {
     // the right file after a restart — subject to a permission
     // re-prompt, which Chrome requires once per session.
     fileHandle: state.fileHandle || null,
+    combined: state.combined,
     dirty: state.dirty,
     zoomMode: state.zoomMode,
     lastFitMode: state.lastFitMode,
@@ -164,6 +165,7 @@ export async function restoreSession(snap) {
   if (snap.currentColor) state.currentColor = snap.currentColor;
   if (snap.currentFontSize) state.currentFontSize = snap.currentFontSize;
   if (snap.currentPenSize) state.currentPenSize = snap.currentPenSize;
+  state.combined = !!snap.combined;
 
   const dropped = (snap.pages.length - pages.length);
   if (dropped > 0) {

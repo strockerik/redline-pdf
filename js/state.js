@@ -78,6 +78,10 @@ export const state = {
   // Document identity, for the save/restore path
   docName: 'Untitled.pdf',
   fileHandle: null,         // FileSystemFileHandle when opened via Finder/picker
+  // True once pages from a second file have been merged in. Such a
+  // document has no single file on disk to save back to, so ⌘S must ask
+  // where to put it rather than overwrite whichever file came first.
+  combined: false,
   dirty: false,
 };
 
@@ -91,6 +95,7 @@ export function resetDocument() {
   state.domRefs = {};
   state.docName = 'Untitled.pdf';
   state.fileHandle = null;
+  state.combined = false;
   state.dirty = false;
 }
 

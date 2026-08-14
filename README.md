@@ -20,7 +20,9 @@ and it works with no network connection once installed.
 - **Zoom** — fit width, fit page, 25–600% in steps, pinch on trackpad
   and touchscreen.
 - **Save** — write back over the file you opened (⌘S), or save a copy
-  somewhere else (⇧⌘S).
+  somewhere else (⇧⌘S). Opening a second file merges it in, and a merged
+  document has no single file to save back to, so ⌘S asks where to put
+  it rather than overwriting whichever file happened to be first.
 - **Autosave** — the session is kept in IndexedDB, so closing the window
   or having iOS evict the app doesn't lose work.
 

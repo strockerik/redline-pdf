@@ -5,7 +5,7 @@ import {
 } from './state.js';
 import {
   renderThumbnails, renderMainCanvas, updateThumbSelection,
-  invalidateThumb, invalidateAllThumbs,
+  invalidateThumb, invalidateAllThumbs, updateTitle,
 } from './view.js';
 
 const { PDFDocument } = PDFLib;
@@ -24,6 +24,21 @@ export async function importPdfBytes(bytes, name) {
 
     const sourceId = state.nextSourceId++;
     state.sources.push({ id: sourceId, name, bytes, pdfLibDoc, pdfjsDoc });
+
+    // Merging a second file means the document no longer corresponds to
+    // any single file on disk. Keeping the first file's handle here is
+    // what used to make ⌘S silently replace *that* file with the merged
+    // result — open A then B, hit save, and A is now A+B. Dropping the
+    // handle sends save() through saveAs(), so the target is chosen
+    // explicitly. Every import path funnels through here, so this covers
+    // the picker, drag-and-drop and the Finder handler alike.
+    const justCombined = state.sources.length > 1 && !state.combined;
+    if (justCombined) {
+      state.combined = true;
+      state.fileHandle = null;
+      state.docName = 'Combined.pdf';
+      updateTitle();
+    }
 
     const count = pdfLibDoc.getPageCount();
     let firstNew = null;
@@ -47,7 +62,13 @@ export async function importPdfBytes(bytes, name) {
     markDirty();
     renderThumbnails();
     if (!state.selectedPageId) selectPage(firstNew);
-    setStatus(`Imported ${name} (${count} page${count === 1 ? '' : 's'})`, 'ok');
+    // After the import message, not before — otherwise it is overwritten
+    // in the same tick and the user never sees why Save changed.
+    if (justCombined) {
+      setStatus('Combined document — Save now asks where to put it.', 'ok');
+    } else {
+      setStatus(`Imported ${name} (${count} page${count === 1 ? '' : 's'})`, 'ok');
+    }
     return firstNew;
   } catch (err) {
     console.error(err);
