@@ -5,7 +5,7 @@ import {
 import {
   renderThumbnails, renderMainCanvas, updateToolbarState, updateTitle,
   installStageGestures, installThumbReorder, invalidateAllThumbs,
-  setZoomMode, zoomStep, setZoomLevel, isTypingTarget,
+  setZoomMode, zoomStep, setZoomLevel, setWheelZoom, isTypingTarget,
 } from './view.js';
 import {
   importPdfFile, addBlankPage, deletePage, rotatePage, reorderPage,
@@ -140,6 +140,7 @@ function installKeyboard() {
     if (isTypingTarget(e.target) && e.key !== 'Escape') return;
 
     if (e.key === 'Escape') {
+      setWheelZoom(false);
       setActiveTool('select');
       document.querySelectorAll('.anno-text').forEach((n) => n.blur());
       deselectAnnotation();

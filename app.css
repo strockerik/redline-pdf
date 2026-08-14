@@ -274,6 +274,8 @@ select, input[type=text]{
    pans regardless of the active tool — the grab cursor has to win over
    those, hence the descendant rules. */
 #canvasStage{ cursor:grab; }
+/* Wheel-zoom mode, latched by double-clicking the page. */
+#canvasStage.wheel-zoom, #canvasStage.wheel-zoom *{ cursor:zoom-in; }
 #canvasStage.panning, #canvasStage.panning *{ cursor:grabbing; }
 #canvasStage.pannable, #canvasStage.pannable *{ cursor:grab; }
 #canvasStage.pannable:active, #canvasStage.pannable:active *{ cursor:grabbing; }

@@ -57,6 +57,7 @@ sheet, and saving downloads to the Files app.
 | Esc | Cancel tool, deselect |
 | Delete | Delete selected note |
 | ← → ↑ ↓ | Previous / next page |
+| double-click | Latch the wheel into zoom (Esc or double-click to exit) |
 | drag | Pan the page (default) |
 | Space + drag | Pan without leaving the current tool |
 
@@ -64,7 +65,13 @@ sheet, and saving downloads to the Files app.
 
 ## Scrolling
 
-The **Fit W** / **Fit Pg** buttons also choose what the scroll wheel does:
+**Double-click the page** to latch the wheel into zooming — Bluebeam's
+dynamic zoom. The cursor turns into a magnifier and the percentage
+readout lights up while it is on; Ctrl+wheel still scrolls, so a
+zoomed-in page stays navigable. Double-click again or press Esc to
+leave. It is a transient mouse mode, so it does not survive a reload.
+
+Otherwise the **Fit W** / **Fit Pg** buttons choose what the scroll wheel does:
 
 | | wheel | Ctrl + wheel |
 |---|---|---|

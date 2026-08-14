@@ -55,6 +55,10 @@ export const state = {
   // Space forces pan, whatever the active tool. Shared so the pen can
   // stand aside for it instead of swallowing the press.
   spaceHeld: false,
+  // Double-click the page to latch the wheel into zooming, Bluebeam-style,
+  // whatever the fit mode would otherwise make it do. Deliberately not
+  // persisted: it is a transient mouse mode, not a document preference.
+  wheelZoom: false,
   pendingCalloutTip: null,  // {x,y} in pt, while placing a callout
 
   currentColor: COLORS[0],

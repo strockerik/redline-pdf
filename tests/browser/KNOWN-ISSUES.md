@@ -57,6 +57,16 @@ Mitigated by making the pen size presets permanent toolbar furniture
 removes the trigger, not the underlying race: **any** real resize — a
 window drag, an orientation change — can still hit it.
 
+**It is load-dependent, and that matters.** Adding the ten wheel-zoom
+checks to the middle of `run.sh` — roughly three extra renders — was
+enough to move the wedge forward from session restore to the *reorder*
+section, costing about forty-five later checks. Backing them out moved it
+back. So this is not one specific broken interaction; the app runs close
+enough to the edge that any extra render can tip it, and once it goes the
+whole tab is degraded (a `Page.navigate` does not recover it). Those
+checks now run in their own browser instance for exactly this reason —
+see `zoom_mode_checks` in `smoke.py`.
+
 **The concurrent-render theory is wrong — tried and disproved.** The
 obvious fix was implemented and reverted: a promise chain keyed by
 `sourceId:pageIndex`, taken by both `renderMainCanvas` and
@@ -76,9 +86,11 @@ What that leaves: the first `pjPage.render()` after a restore never
 settles on its own, while `getPage` on the same document still answers.
 Worth investigating next, roughly in order of cheapness —
 
-1. Whether the RenderTask is being cancelled by the `activeRenderTask`
-   cancel path just before it is awaited, so nothing ever settles it
-   (add logging around `task.promise` and the cancel call).
+1. ~~Whether the cancel path wedges it: `cancel()` is not synchronous, so
+   the next `render()` on the same canvas may start while the old task
+   still holds it.~~ **Tried and reverted.** Awaiting the cancelled
+   task's promise (`try { await prev.promise } catch {}`) before starting
+   the next render changed nothing — same `render: HUNG`.
 2. Whether the restored `pdfjsDoc` is built on bytes another consumer
    has since detached — `getPage` resolving from cached structure would
    not prove the data is still there, but rasterising needs it.

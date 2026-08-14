@@ -94,6 +94,53 @@ def click(ws, selector):
     time.sleep(0.15)
 
 
+def stage_point(ws, fx, fy):
+    """A viewport point at (fx, fy) of the *visible* part of the page. The
+    stage may be scrolled, so a fraction of the canvas alone can land off
+    screen — on the toolbar, or outside the window entirely."""
+    b = ev(ws, """(() => {
+      const c = document.getElementById('pageCanvas').getBoundingClientRect();
+      const s = document.getElementById('canvasStage').getBoundingClientRect();
+      const l = Math.max(c.left, s.left), r = Math.min(c.right, s.right);
+      const t = Math.max(c.top, s.top), b2 = Math.min(c.bottom, s.bottom);
+      return {l, t, w: r - l, h: b2 - t};
+    })()""")
+    return b["l"] + b["w"] * fx, b["t"] + b["h"] * fy
+
+
+def wheel(ws, dy, ctrl=False, meta=False, pinch=False):
+    """A real Ctrl+wheel means the Ctrl key is physically down, so hold it
+    for the duration — that is exactly what the app uses to tell a keyboard
+    Ctrl from a trackpad pinch (which sets ctrlKey with no key press, i.e.
+    pinch=True here)."""
+    mods = (2 if (ctrl or pinch) else 0) | (4 if meta else 0)
+    box = ev(ws, """(() => {
+      const r = document.getElementById('canvasStage').getBoundingClientRect();
+      return {x: r.left + r.width/2, y: r.top + r.height/2};
+    })()""")
+    if ctrl:
+        ws.call("Input.dispatchKeyEvent", {
+            "type": "rawKeyDown", "key": "Control", "code": "ControlLeft",
+            "windowsVirtualKeyCode": 17, "nativeVirtualKeyCode": 17, "modifiers": 2})
+        time.sleep(0.05)
+    ws.call("Input.dispatchMouseEvent", {
+        "type": "mouseWheel", "x": box["x"], "y": box["y"],
+        "deltaX": 0, "deltaY": dy, "modifiers": mods,
+    })
+    if ctrl:
+        time.sleep(0.05)
+        ws.call("Input.dispatchKeyEvent", {
+            "type": "keyUp", "key": "Control", "code": "ControlLeft",
+            "windowsVirtualKeyCode": 17, "nativeVirtualKeyCode": 17, "modifiers": 0})
+    time.sleep(0.5)
+
+
+def sel(ws):
+    """Index of the selected thumbnail, or -1."""
+    return ev(ws, "[...document.querySelectorAll('#thumbList .thumb')]"
+                  ".findIndex(t => t.classList.contains('selected'))")
+
+
 def key(ws, k, code, vk, meta=False, shift=False):
     mods = (4 if meta else 0) | (8 if shift else 0)
     for t in ("rawKeyDown", "keyUp"):
@@ -192,6 +239,72 @@ window.__reopenSaved = async (i) => {
 };
 """
 
+
+def zoom_mode_checks(ws):
+    """Double-click latches the wheel into zooming, Bluebeam style.
+
+    Runs in its own browser instance. These checks add a burst of
+    renders, and doing that anywhere inside the main run pushes the
+    KNOWN-ISSUES deadlock forward far enough to wedge the reorder
+    section — which costs ~45 later checks. Isolating it keeps both.
+    """
+    print("\n=== double-click wheel zoom ===")
+    time.sleep(1.0)
+
+    def dbl(fx, fy):
+        x, y = stage_point(ws, fx, fy)
+        for n in (1, 2):
+            for t in ("mousePressed", "mouseReleased"):
+                ws.call("Input.dispatchMouseEvent", {"type": t, "x": x, "y": y,
+                                                     "button": "left", "clickCount": n})
+        time.sleep(0.4)
+
+    # Fit Pg is where the wheel normally turns pages, so latching it to
+    # zoom is an observable change rather than a no-op.
+    click(ws, "#btnFitPage")
+    time.sleep(2.0)
+    check("wheel zoom starts off", ev(ws, "(async()=>(await import('./js/state.js')).state.wheelZoom)()",
+                                      awaitp=True) is False)
+    dbl(0.5, 0.5)
+    check("double-click latches wheel zoom on",
+          ev(ws, "(async()=>(await import('./js/state.js')).state.wheelZoom)()", awaitp=True) is True)
+    check("the page shows the zoom cursor",
+          ev(ws, "getComputedStyle(document.getElementById('canvasStage')).cursor") == "zoom-in")
+    check("the readout marks the mode",
+          ev(ws, "document.getElementById('zoomReadout').classList.contains('toggled')") is True)
+
+    pg_before = sel(ws)
+    z_before = ev(ws, "document.getElementById('zoomReadout').textContent")
+    wheel(ws, -120)
+    z_after = ev(ws, "document.getElementById('zoomReadout').textContent")
+    check("wheel now zooms in Fit Pg, where it would have paged",
+          z_before != z_after, f"{z_before} -> {z_after}")
+    check("and does not turn the page", sel(ws) == pg_before, f"page index {sel(ws)}")
+
+    # Ctrl still scrolls, so a zoomed page stays navigable in the mode.
+    ev(ws, "document.getElementById('canvasStage').scrollTop = 0")
+    time.sleep(0.3)
+    t0 = ev(ws, "document.getElementById('canvasStage').scrollTop")
+    wheel(ws, 120, ctrl=True)
+    check("ctrl+wheel still scrolls while zoom mode is on",
+          ev(ws, "document.getElementById('canvasStage').scrollTop") > t0,
+          f"scrollTop {t0} -> {ev(ws, 'document.getElementById(\"canvasStage\").scrollTop')}")
+
+    dbl(0.5, 0.5)
+    check("double-click again releases it",
+          ev(ws, "(async()=>(await import('./js/state.js')).state.wheelZoom)()", awaitp=True) is False)
+    check("cursor goes back to grab",
+          ev(ws, "getComputedStyle(document.getElementById('canvasStage')).cursor") == "grab")
+
+    # Esc is the other way out.
+    dbl(0.5, 0.5)
+    key(ws, "Escape", "Escape", 27)
+    time.sleep(0.3)
+    check("Esc also leaves zoom mode",
+          ev(ws, "(async()=>(await import('./js/state.js')).state.wheelZoom)()", awaitp=True) is False)
+
+    time.sleep(2.0)
+    time.sleep(0.5)
 
 def main():
     global failed
@@ -358,72 +471,40 @@ def main():
         # ---------------------------------------------- 6b. wheel modes
         print("\n=== scroll wheel behaviour ===")
 
-        def wheel(dy, ctrl=False, meta=False, pinch=False):
-            """A real Ctrl+wheel means the Ctrl key is physically down, so hold
-            it for the duration — that is exactly what the app uses to tell a
-            keyboard Ctrl from a trackpad pinch (which sets ctrlKey with no
-            key press, i.e. pinch=True here)."""
-            mods = (2 if (ctrl or pinch) else 0) | (4 if meta else 0)
-            box = ev(ws, """(() => {
-              const r = document.getElementById('canvasStage').getBoundingClientRect();
-              return {x: r.left + r.width/2, y: r.top + r.height/2};
-            })()""")
-            if ctrl:
-                ws.call("Input.dispatchKeyEvent", {
-                    "type": "rawKeyDown", "key": "Control", "code": "ControlLeft",
-                    "windowsVirtualKeyCode": 17, "nativeVirtualKeyCode": 17,
-                    "modifiers": 2})
-                time.sleep(0.05)
-            ws.call("Input.dispatchMouseEvent", {
-                "type": "mouseWheel", "x": box["x"], "y": box["y"],
-                "deltaX": 0, "deltaY": dy, "modifiers": mods,
-            })
-            if ctrl:
-                time.sleep(0.05)
-                ws.call("Input.dispatchKeyEvent", {
-                    "type": "keyUp", "key": "Control", "code": "ControlLeft",
-                    "windowsVirtualKeyCode": 17, "nativeVirtualKeyCode": 17,
-                    "modifiers": 0})
-            time.sleep(0.5)
-
-        def sel():
-            return ev(ws, "[...document.querySelectorAll('#thumbList .thumb')]"
-                          ".findIndex(t => t.classList.contains('selected'))")
-
         # --- Fit Pg: wheel turns pages, ctrl+wheel zooms ---
         click(ws, "#btnFitPage")
         time.sleep(0.6)
         click(ws, "#thumbList .thumb")
         time.sleep(0.6)
-        start = sel()
-        wheel(120)
-        after = sel()
+        start = sel(ws)
+        wheel(ws, 120)
+        after = sel(ws)
         check("Fit Pg: wheel down goes to the next page", after == start + 1,
               f"page index {start} -> {after}")
-        wheel(-120)
-        back = sel()
+        wheel(ws, -120)
+        back = sel(ws)
         check("Fit Pg: wheel up goes back", back == start, f"-> {back}")
 
         z0 = ev(ws, "document.getElementById('zoomReadout').textContent")
-        wheel(-120, ctrl=True)
+        wheel(ws, -120, ctrl=True)
         z1 = ev(ws, "document.getElementById('zoomReadout').textContent")
         check("Fit Pg: ctrl+wheel zooms instead", z0 != z1, f"{z0} -> {z1}")
-        check("Fit Pg: ctrl+wheel did not also turn the page", sel() == back,
-              f"page index {sel()}")
+        check("Fit Pg: ctrl+wheel did not also turn the page", sel(ws) == back,
+              f"page index {sel(ws)}")
 
         # --- Fit W: wheel zooms, ctrl+wheel scrolls ---
         click(ws, "#btnFitWidth")
         time.sleep(0.6)
-        pg0 = sel()
+        pg0 = sel(ws)
         z2 = ev(ws, "document.getElementById('zoomReadout').textContent")
-        wheel(-120)
+        wheel(ws, -120)
         z3 = ev(ws, "document.getElementById('zoomReadout').textContent")
         check("Fit W: wheel zooms in", z2 != z3, f"{z2} -> {z3}")
-        check("Fit W: wheel did not change page", sel() == pg0, f"page index {sel()}")
+        check("Fit W: wheel did not change page", sel(ws) == pg0, f"page index {sel(ws)}")
 
         # Zooming flips zoomMode to 'custom' — the wheel must keep zooming.
         z4 = ev(ws, "document.getElementById('zoomReadout').textContent")
-        wheel(-120)
+        wheel(ws, -120)
         z5 = ev(ws, "document.getElementById('zoomReadout').textContent")
         check("Fit W: wheel still zooms after leaving the fit mode", z4 != z5,
               f"{z4} -> {z5}")
@@ -432,7 +513,7 @@ def main():
         time.sleep(0.3)
         top0 = ev(ws, "document.getElementById('canvasStage').scrollTop")
         z6 = ev(ws, "document.getElementById('zoomReadout').textContent")
-        wheel(120, ctrl=True)
+        wheel(ws, 120, ctrl=True)
         top1 = ev(ws, "document.getElementById('canvasStage').scrollTop")
         z7 = ev(ws, "document.getElementById('zoomReadout').textContent")
         check("Fit W: ctrl+wheel scrolls the stage", top1 > top0, f"scrollTop {top0} -> {top1}")
@@ -440,7 +521,7 @@ def main():
 
         # Cmd+wheel is the always-zoom escape hatch.
         z8 = ev(ws, "document.getElementById('zoomReadout').textContent")
-        wheel(-120, meta=True)
+        wheel(ws, -120, meta=True)
         z9 = ev(ws, "document.getElementById('zoomReadout').textContent")
         check("cmd+wheel zooms regardless of mode", z8 != z9, f"{z8} -> {z9}")
 
@@ -453,7 +534,7 @@ def main():
         ev(ws, "document.getElementById('canvasStage').scrollTop = 0")
         time.sleep(0.3)
         za = ev(ws, "document.getElementById('zoomReadout').textContent")
-        wheel(-20, pinch=True)
+        wheel(ws, -20, pinch=True)
         zb = ev(ws, "document.getElementById('zoomReadout').textContent")
         check("trackpad pinch still zooms in Fit W", za != zb, f"{za} -> {zb}")
 
@@ -489,21 +570,11 @@ def main():
         check("the page inherits it",
               ev(ws, "getComputedStyle(document.getElementById('annoLayer')).cursor") == "grab")
 
-        def stage_point(fx, fy):
-            b = ev(ws, """(() => {
-              const c = document.getElementById('pageCanvas').getBoundingClientRect();
-              const s = document.getElementById('canvasStage').getBoundingClientRect();
-              const l = Math.max(c.left, s.left), r = Math.min(c.right, s.right);
-              const t = Math.max(c.top, s.top), b2 = Math.min(c.bottom, s.bottom);
-              return {l, t, w: r - l, h: b2 - t};
-            })()""")
-            return b["l"] + b["w"] * fx, b["t"] + b["h"] * fy
-
         # Zoom in so there is somewhere to pan to.
         click(ws, "#btnZoomIn")
         time.sleep(0.8)
         before = ev(ws, "(s=>({l:s.scrollLeft,t:s.scrollTop}))(document.getElementById('canvasStage'))")
-        x0, y0 = stage_point(0.6, 0.6)
+        x0, y0 = stage_point(ws, 0.6, 0.6)
         ws.call("Input.dispatchMouseEvent", {"type": "mousePressed", "x": x0, "y": y0,
                                              "button": "left", "clickCount": 1})
         for i in range(1, 7):
@@ -536,7 +607,7 @@ def main():
           el.focus();
         })()""")
         check("probe holds focus", ev(ws, "document.activeElement.id") == "focusProbe")
-        px, py = stage_point(0.5, 0.5)
+        px, py = stage_point(ws, 0.5, 0.5)
         for t in ("mousePressed", "mouseReleased"):
             ws.call("Input.dispatchMouseEvent", {"type": t, "x": px, "y": py,
                                                  "button": "left", "clickCount": 1})
@@ -774,7 +845,6 @@ def main():
               f"{restored_ink} dark px")
         shot(ws, "07-restored")
 
-        # ---------------------------------------------- console
         print("\n=== console ===")
         ws.drain(0.6)
         bad = []
@@ -790,12 +860,50 @@ def main():
         errs = [b for b in bad if b.startswith("EXCEPTION") or b.startswith("error")]
         check("no uncaught exceptions or console errors", not errs, f"{len(errs)} error(s)")
 
+    except TimeoutError:
+        failed += 1
+        print("\nFAIL  the renderer stopped answering — pdf.js is wedged")
+        print("      This is the deadlock in KNOWN-ISSUES.md. Everything after")
+        print("      this point was skipped; the checks above still stand.")
     finally:
         try:
             proc.terminate()
         except Exception:
             pass
         shutil.rmtree(profile, ignore_errors=True)
+
+    # --- second phase: its own browser, for the reason in the docstring ---
+    print("\n=== double-click wheel zoom (isolated) ===")
+    profile2 = tempfile.mkdtemp(prefix="redline-smoke-zm-")
+    proc2 = cdp.launch("about:blank", 9223, profile2, headless=HEADLESS)
+    try:
+        t2 = cdp.page_target(9223)
+        ws2 = cdp.WS(t2["webSocketDebuggerUrl"])
+        ws2.call("Runtime.enable")
+        ws2.call("Page.enable")
+        ws2.call("Page.navigate", {"url": URL})
+        # The toolbar is built at the end of boot, so a swatch existing is
+        # the signal that the module graph is up — #pageCanvas is in the
+        # static markup and says nothing about whether the app booted.
+        wait_for(ws2, "document.querySelectorAll('#colorGrp .swatch').length > 0",
+                 timeout=30, label="zoom-mode app booted")
+        time.sleep(0.5)
+        d2 = ws2.call("DOM.getDocument")["root"]["nodeId"]
+        f2 = ws2.call("DOM.querySelector", {"nodeId": d2, "selector": "#fileInput"})["nodeId"]
+        ws2.call("DOM.setFileInputFiles", {"nodeId": f2, "files": [FIXTURE]})
+        wait_for(ws2, "document.querySelectorAll('#thumbList .thumb').length === 3",
+                 timeout=30, label="zoom-mode import")
+        time.sleep(1.5)
+        zoom_mode_checks(ws2)
+    except TimeoutError:
+        failed += 1
+        print("FAIL  the renderer stopped answering during the zoom-mode checks")
+    finally:
+        try:
+            proc2.terminate()
+        except Exception:
+            pass
+        shutil.rmtree(profile2, ignore_errors=True)
 
     print(f"\n{passed} passed, {failed} failed")
     print(f"screenshots: {SHOTS}")

@@ -2,7 +2,7 @@
  * (with pointer-based reorder that works under both mouse and finger).
  */
 import {
-  state, visualSize, normRot,
+  state, setStatus, visualSize, normRot,
   THUMB_WIDTH, PT_TO_PX, ZOOM_STEPS, MIN_ZOOM, MAX_ZOOM,
 } from './state.js';
 import { renderAnnotationLayer } from './annots.js';
@@ -62,6 +62,31 @@ export function updateZoomReadout() {
   if (el) el.textContent = Math.round(state.zoomLevel * 100) + '%';
   $('btnFitWidth')?.classList.toggle('toggled', state.zoomMode === 'fit-width');
   $('btnFitPage')?.classList.toggle('toggled', state.zoomMode === 'fit-page');
+}
+
+/** Latch the wheel into zooming, or let it go.
+ *
+ *  The mode needs a visible marker, or a wheel that suddenly zooms in Fit
+ *  Pg (where it normally turns pages) reads as a bug. The cursor covers
+ *  the page, and the percentage readout lights up so the state is still
+ *  legible once the pointer has left the stage. `placeHint` is
+ *  deliberately not used — setActiveTool owns that, and the two would
+ *  overwrite each other. */
+export function setWheelZoom(on) {
+  const next = !!on;
+  if (next === state.wheelZoom) return;
+  state.wheelZoom = next;
+  $('canvasStage')?.classList.toggle('wheel-zoom', next);
+  const readout = $('zoomReadout');
+  readout?.classList.toggle('toggled', next);
+  if (readout) {
+    readout.title = next
+      ? 'Wheel zoom is on — double-click the page or press Esc to exit'
+      : 'Reset to 100%';
+  }
+  setStatus(next
+    ? 'Zoom mode: scroll to zoom. Double-click or Esc to exit.'
+    : 'Zoom mode off.', 'ok');
 }
 
 // ============================================================
@@ -172,11 +197,13 @@ export function installStageGestures(onPageStep) {
 
   // --- Wheel ---
   //
-  // What a plain wheel does depends on the fit mode the user picked:
+  // What a plain wheel does depends on the fit mode the user picked, and
+  // on whether a double-click has latched wheel-zoom on:
   //
-  //            plain wheel     Ctrl + wheel
-  //   Fit Pg   change page     zoom
-  //   Fit W    zoom            scroll
+  //              plain wheel     Ctrl + wheel
+  //   Fit Pg     change page     zoom
+  //   Fit W      zoom            scroll
+  //   zoom mode  zoom            scroll
   //
   // Cmd + wheel always zooms, whatever the mode.
   //
@@ -228,6 +255,21 @@ export function installStageGestures(onPageStep) {
   stage.addEventListener('wheel', (e) => {
     const pinch = e.ctrlKey && !ctrlHeld;             // trackpad, not the key
     if (e.metaKey || pinch) { e.preventDefault(); zoomBy(e, pinch); return; }
+
+    // Latched by a double-click on the page: the wheel zooms and nothing
+    // else, whatever the fit mode says. Ctrl still scrolls, so a zoomed-in
+    // page is still navigable without leaving the mode.
+    if (state.wheelZoom) {
+      e.preventDefault();
+      if (e.ctrlKey) {
+        const k = e.deltaMode === 1 ? 16 : 1;
+        stage.scrollTop += e.deltaY * k;
+        stage.scrollLeft += e.deltaX * k;
+      } else {
+        zoomBy(e, false);
+      }
+      return;
+    }
 
     if (state.lastFitMode === 'fit-page') {
       e.preventDefault();
@@ -332,6 +374,16 @@ export function installStageGestures(onPageStep) {
     !!(target.closest?.('.anno-box') ||
        target.classList?.contains('ink-stroke') ||
        target.classList?.contains('tip-handle'));
+
+  // --- Double-click to latch the wheel into zoom ---
+  stage.addEventListener('dblclick', (e) => {
+    // Only the plain pointer mode. With a tool active a double-click means
+    // something else — placing, or opening a note for editing — and notes,
+    // strokes and handles all own their own double-click.
+    if (state.activeTool !== 'select') return;
+    if (ownsTheDrag(e.target)) return;
+    setWheelZoom(!state.wheelZoom);
+  });
 
   // Set when a pan actually moved, so the click that ends the drag can be
   // swallowed. A flag rather than a one-shot listener: a drag ended by
