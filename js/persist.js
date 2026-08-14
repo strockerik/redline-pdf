@@ -69,9 +69,11 @@ function snapshot() {
     fileHandle: state.fileHandle || null,
     dirty: state.dirty,
     zoomMode: state.zoomMode,
+    lastFitMode: state.lastFitMode,
     zoomLevel: state.zoomLevel,
     currentColor: state.currentColor,
     currentFontSize: state.currentFontSize,
+    currentPenSize: state.currentPenSize,
   };
 }
 
@@ -155,9 +157,13 @@ export async function restoreSession(snap) {
   state.fileHandle = snap.fileHandle || null;
   state.dirty = snap.dirty !== false;
   state.zoomMode = snap.zoomMode || 'fit-width';
+  // Sessions saved before lastFitMode existed fall back to the zoom mode.
+  state.lastFitMode = snap.lastFitMode
+    || (snap.zoomMode === 'fit-page' ? 'fit-page' : 'fit-width');
   state.zoomLevel = snap.zoomLevel || 1;
   if (snap.currentColor) state.currentColor = snap.currentColor;
   if (snap.currentFontSize) state.currentFontSize = snap.currentFontSize;
+  if (snap.currentPenSize) state.currentPenSize = snap.currentPenSize;
 
   const dropped = (snap.pages.length - pages.length);
   if (dropped > 0) {

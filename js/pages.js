@@ -125,6 +125,16 @@ export function remapAnnotationsForRotation(page, oldR, newR) {
   if (normRot(oldR) === normRot(newR)) return;
 
   for (const a of page.annotations) {
+    // Ink has no box — remap the points themselves and move on.
+    if (a.type === 'ink') {
+      for (const p of a.points) {
+        const n = toNative(oldR, page.W0, page.H0, p.x, p.y);
+        const v = toVisual(newR, page.W0, page.H0, n.x, n.y);
+        p.x = v.x;
+        p.y = v.y;
+      }
+      continue;
+    }
     const h = estimateBoxHeight(a);
     const cx = a.x + a.width / 2, cy = a.y + h / 2;
     const nat = toNative(oldR, page.W0, page.H0, cx, cy);

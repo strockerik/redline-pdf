@@ -153,4 +153,68 @@ for (const R of [0, 90, 180, 270]) {
   check(`line spacing R=${R}`, near(gap, 12 * LINE_HEIGHT_MULT, 0.01), `${gap.toFixed(3)}`);
 }
 
+// --- 7. Ink: every point lands where toNative says it should ---
+// Computed independently here, the same way the rect expectations above
+// are, so an error in state.js's transform can't hide behind itself.
+const nativeOf = {
+  0:   (x, y) => ({ x,          y: H0 - y }),
+  90:  (x, y) => ({ x: y,       y: x }),
+  180: (x, y) => ({ x: W0 - x,  y }),
+  270: (x, y) => ({ x: W0 - y,  y: H0 - x }),
+};
+const inkPts = [{ x: 100, y: 120 }, { x: 140, y: 180 }, { x: 260, y: 150 }];
+const ink = { id: 9, type: 'ink', color: '#1f6feb', size: 2.5, points: inkPts };
+
+for (const R of [0, 90, 180, 270]) {
+  const page = recorder();
+  drawAnnotationOnPage(page, font, ink, R, W0, H0);
+  const lines = page.calls.lines;
+
+  check(`ink draws one segment per gap R=${R}`, lines.length === inkPts.length - 1,
+    `${lines.length} segments for ${inkPts.length} points`);
+  check(`ink draws no text or boxes R=${R}`,
+    page.calls.texts.length === 0 && page.calls.rects.length === 0,
+    `${page.calls.texts.length} texts, ${page.calls.rects.length} rects`);
+
+  // Endpoints must match the independent transform, in order.
+  let worst = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const s = nativeOf[R](inkPts[i].x, inkPts[i].y);
+    const e = nativeOf[R](inkPts[i + 1].x, inkPts[i + 1].y);
+    worst = Math.max(worst,
+      Math.abs(lines[i].start.x - s.x), Math.abs(lines[i].start.y - s.y),
+      Math.abs(lines[i].end.x - e.x), Math.abs(lines[i].end.y - e.y));
+  }
+  check(`ink points land in native space R=${R}`, worst < 0.01, `max error ${worst}`);
+
+  check(`ink keeps its stroke width R=${R}`,
+    lines.every((l) => near(l.thickness, 2.5)), `${lines[0].thickness}`);
+  check(`ink inside the page R=${R}`,
+    lines.every((l) => l.start.x >= -0.01 && l.start.x <= W0 + 0.01 &&
+                       l.start.y >= -0.01 && l.start.y <= H0 + 0.01),
+    'a point fell outside the MediaBox');
+
+  // Rigid: on-screen segment lengths must survive the transform.
+  const visLen = Math.hypot(inkPts[1].x - inkPts[0].x, inkPts[1].y - inkPts[0].y);
+  const natLen = Math.hypot(lines[0].end.x - lines[0].start.x,
+                            lines[0].end.y - lines[0].start.y);
+  check(`ink segment length preserved R=${R}`, near(visLen, natLen), `${visLen} vs ${natLen}`);
+}
+
+// A tap makes a dot, not nothing.
+{
+  const page = recorder();
+  drawAnnotationOnPage(page, font, { ...ink, points: [{ x: 50, y: 50 }] }, 0, W0, H0);
+  const l = page.calls.lines[0];
+  check('single-point ink still draws a dot', page.calls.lines.length === 1 &&
+    near(l.start.x, l.end.x) && near(l.start.y, l.end.y));
+}
+
+// An empty stroke must be a no-op rather than an exception.
+{
+  const page = recorder();
+  drawAnnotationOnPage(page, font, { ...ink, points: [] }, 0, W0, H0);
+  check('empty ink draws nothing', page.calls.lines.length === 0);
+}
+
 print(failures ? `\n${failures} FAILURE(S)` : '\nAll geometry checks passed');

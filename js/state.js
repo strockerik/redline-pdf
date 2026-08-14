@@ -20,6 +20,16 @@ export const LINE_HEIGHT_MULT = 1.28;  // multiplier of font size
 export const DEFAULT_BOX_WIDTH = 170;  // pt
 export const THUMB_WIDTH = 150;        // px
 
+// Pen stroke widths in pt, and the closest distance between two recorded
+// points. Anything finer than that is invisible at print size and just
+// makes the exported PDF bigger.
+export const PEN_SIZES = [
+  { key: 'S', label: 'Fine',   width: 1.2 },
+  { key: 'M', label: 'Medium', width: 2.5 },
+  { key: 'L', label: 'Bold',   width: 5 },
+];
+export const PEN_MIN_POINT_DIST = 1.2;  // pt
+
 // A PDF point is 1/72in; a CSS reference pixel is 1/96in. Rendering at
 // this ratio makes "100%" mean actual physical size on screen, the way
 // Acrobat and Bluebeam use the number.
@@ -41,13 +51,18 @@ export const state = {
 
   selectedPageId: null,
   selectedAnnoId: null,
-  activeTool: 'select',     // 'select' | 'text' | 'callout'
+  activeTool: 'select',     // 'select' | 'text' | 'callout' | 'pen'
   pendingCalloutTip: null,  // {x,y} in pt, while placing a callout
 
   currentColor: COLORS[0],
   currentFontSize: 12,
+  currentPenSize: PEN_SIZES[1].width,
 
   zoomMode: 'fit-width',    // 'fit-width' | 'fit-page' | 'custom'
+  // The last fit mode the user actually chose. Zooming flips zoomMode to
+  // 'custom', so this is what the scroll wheel keys off — otherwise one
+  // wheel-zoom in fit-width would silently change what the wheel does.
+  lastFitMode: 'fit-width', // 'fit-width' | 'fit-page'
   zoomLevel: 1,             // 1 = 100%
   currentScale: 1,          // logical px per pt, derived from the above
 

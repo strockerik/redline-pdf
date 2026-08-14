@@ -7,7 +7,7 @@
  */
 import {
   state, markDirty, computeAttachPoint, computeArrowWings,
-  ANNO_PAD, LINE_HEIGHT_MULT, DEFAULT_BOX_WIDTH,
+  ANNO_PAD, LINE_HEIGHT_MULT, DEFAULT_BOX_WIDTH, PEN_MIN_POINT_DIST,
 } from './state.js';
 import { updateThumbBadge, updateToolbarState } from './view.js';
 
@@ -27,6 +27,8 @@ export function renderAnnotationLayer(page) {
 }
 
 function buildAnnoDom(page, a) {
+  if (a.type === 'ink') { buildInkDom(page, a); return; }
+
   const overlay = $('annoLayer');
   const svg = $('leaderSvg');
   const scale = state.currentScale;
@@ -84,6 +86,126 @@ function buildAnnoDom(page, a) {
   updateLeaderVisual(page, a);
 
   wireAnnoInteractions(page, a, { box, text, resize, del, tipHandle });
+}
+
+// ============================================================
+// Ink
+// ============================================================
+function pointsAttr(points, scale) {
+  return points.map((p) => `${p.x * scale},${p.y * scale}`).join(' ');
+}
+
+function makePolyline(a, scale, { halo = false } = {}) {
+  const el = document.createElementNS(SVG_NS, 'polyline');
+  el.setAttribute('points', pointsAttr(a.points, scale));
+  el.setAttribute('fill', 'none');
+  el.setAttribute('stroke', a.color);
+  el.setAttribute('stroke-linecap', 'round');
+  el.setAttribute('stroke-linejoin', 'round');
+  el.setAttribute('stroke-width', (a.size * scale) * (halo ? 3 : 1));
+  if (halo) {
+    el.setAttribute('stroke-opacity', '0.28');
+    el.setAttribute('class', 'ink-halo');
+  } else {
+    el.setAttribute('class', 'ink-stroke');
+  }
+  return el;
+}
+
+function buildInkDom(page, a) {
+  const svg = $('leaderSvg');
+  const scale = state.currentScale;
+  const selected = a.id === state.selectedAnnoId;
+
+  // The halo goes underneath, so selection reads without altering the
+  // stroke the user actually drew.
+  const halo = selected ? makePolyline(a, scale, { halo: true }) : null;
+  if (halo) svg.appendChild(halo);
+
+  const line = makePolyline(a, scale);
+  svg.appendChild(line);
+
+  state.domRefs[a.id] = { inkEl: line, haloEl: halo };
+
+  // Clicking a stroke selects it, so a stray mark can be deleted.
+  line.addEventListener('pointerdown', (e) => {
+    if (state.activeTool === 'pen') return;   // drawing wins over selecting
+    e.stopPropagation();
+    selectInk(page, a);
+  });
+}
+
+function selectInk(page, a) {
+  if (state.selectedAnnoId === a.id) return;
+  state.selectedAnnoId = a.id;
+  renderAnnotationLayer(page);
+  updateToolbarState();
+}
+
+/** Freehand drawing. Points are captured in visual-space pt, exactly
+ *  like every other annotation, so rotation and export need no special
+ *  case beyond walking the array. */
+export function installPenDrawing() {
+  const layer = $('annoLayer');
+  let stroke = null;      // the in-progress annotation
+  let liveEl = null;      // its polyline, updated as the pointer moves
+
+  const pointAt = (ev) => {
+    // Read the rect every time: the stage can scroll mid-stroke, and a
+    // rect captured at the start would silently drift.
+    const rect = $('pageCanvas').getBoundingClientRect();
+    const scale = state.currentScale;
+    return { x: (ev.clientX - rect.left) / scale, y: (ev.clientY - rect.top) / scale };
+  };
+
+  layer.addEventListener('pointerdown', (e) => {
+    if (state.activeTool !== 'pen') return;
+    const page = state.pages.find((p) => p.id === state.selectedPageId);
+    if (!page) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    stroke = {
+      id: state.nextAnnoId++,
+      type: 'ink',
+      color: state.currentColor,
+      size: state.currentPenSize,
+      points: [pointAt(e)],
+    };
+    liveEl = makePolyline(stroke, state.currentScale);
+    $('leaderSvg').appendChild(liveEl);
+    try { layer.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
+  });
+
+  layer.addEventListener('pointermove', (e) => {
+    if (!stroke) return;
+    e.preventDefault();
+    const p = pointAt(e);
+    const last = stroke.points[stroke.points.length - 1];
+    if (Math.hypot(p.x - last.x, p.y - last.y) < PEN_MIN_POINT_DIST) return;
+    stroke.points.push(p);
+    liveEl.setAttribute('points', pointsAttr(stroke.points, state.currentScale));
+  });
+
+  const finish = (e) => {
+    if (!stroke) return;
+    try { layer.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+    const page = state.pages.find((p) => p.id === state.selectedPageId);
+    const done = stroke;
+    stroke = null;
+    liveEl = null;
+
+    if (!page) return;
+    // A tap is a dot: duplicate the point so every stroke has a segment.
+    if (done.points.length === 1) done.points.push({ ...done.points[0] });
+
+    page.annotations.push(done);
+    markDirty();
+    renderAnnotationLayer(page);
+    updateThumbBadge(page);
+  };
+  layer.addEventListener('pointerup', finish);
+  layer.addEventListener('pointercancel', finish);
 }
 
 // ============================================================
@@ -313,12 +435,19 @@ export function deleteAnnotation(page, annoId) {
 }
 
 export function deselectAnnotation() {
+  const wasInk = !!state.domRefs[state.selectedAnnoId]?.inkEl;
   state.selectedAnnoId = null;
   document.querySelectorAll('.anno-box').forEach((n) => {
     n.classList.remove('selected');
     n.classList.remove('editing');
   });
   document.querySelectorAll('.tip-handle').forEach((n) => { n.style.display = 'none'; });
+  // An ink selection is drawn as a halo element, so it has to be rebuilt
+  // rather than declassed.
+  if (wasInk) {
+    const page = state.pages.find((p) => p.id === state.selectedPageId);
+    if (page) renderAnnotationLayer(page);
+  }
   updateToolbarState();
 }
 
@@ -331,9 +460,11 @@ export function setActiveTool(tool) {
 
   $('toolText').classList.toggle('toggled', tool === 'text');
   $('toolCallout').classList.toggle('toggled', tool === 'callout');
+  $('toolPen')?.classList.toggle('toggled', tool === 'pen');
   const layer = $('annoLayer');
   layer.classList.toggle('tool-text', tool === 'text');
   layer.classList.toggle('tool-callout', tool === 'callout');
+  layer.classList.toggle('tool-pen', tool === 'pen');
 
   const hint = $('placeHint');
   if (tool === 'text') {
@@ -341,6 +472,9 @@ export function setActiveTool(tool) {
     hint.classList.add('show');
   } else if (tool === 'callout') {
     hint.textContent = 'Tap what you’re pointing at, then tap where the note goes.';
+    hint.classList.add('show');
+  } else if (tool === 'pen') {
+    hint.textContent = 'Drag on the page to draw. Esc when you’re done.';
     hint.classList.add('show');
   } else {
     hint.classList.remove('show');
@@ -350,6 +484,11 @@ export function setActiveTool(tool) {
 /** Click/tap handler for the annotation layer — placement and deselect. */
 export function handleLayerClick(e) {
   if (e.target.closest('.anno-box')) return;
+  // A pen stroke ends in a click; it must not also deselect or place.
+  if (state.activeTool === 'pen') return;
+  // Selecting a stroke happens on pointerdown, but the click that follows
+  // still bubbles here — without this it would deselect it again.
+  if (e.target.classList?.contains('ink-stroke')) return;
   const page = state.pages.find((p) => p.id === state.selectedPageId);
   if (!page) return;
 
@@ -403,9 +542,10 @@ function placeAnnotation(page, props) {
 
 /** Apply a color or font size to the current selection, or set the
  *  default for the next placement when nothing is selected. */
-export function applyAnnoStyle({ color, fontSize }) {
+export function applyAnnoStyle({ color, fontSize, penSize }) {
   if (color) state.currentColor = color;
   if (fontSize) state.currentFontSize = fontSize;
+  if (penSize) state.currentPenSize = penSize;
   if (!state.selectedAnnoId) return;
 
   const page = state.pages.find((p) => p.id === state.selectedPageId);
@@ -413,12 +553,14 @@ export function applyAnnoStyle({ color, fontSize }) {
   if (!a) return;
 
   if (color) a.color = color;
-  if (fontSize) a.fontSize = fontSize;
+  // Font size and stroke width each only mean something to one kind.
+  if (fontSize && a.type !== 'ink') a.fontSize = fontSize;
+  if (penSize && a.type === 'ink') a.size = penSize;
   markDirty();
 
   renderAnnotationLayer(page);
   const refs = state.domRefs[a.id];
-  if (refs) {
+  if (refs && refs.boxEl) {
     refs.boxEl.classList.add('selected');
     if (refs.tipHandle) refs.tipHandle.style.display = '';
   }

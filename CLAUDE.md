@@ -13,6 +13,10 @@ python3 -m http.server 8000     # must be http — ES modules and service
                                 # workers do not run from file://
 tests/run.sh                    # 78 checks under JavaScriptCore (ships
                                 # with macOS; no node, no npm)
+tests/browser/run.sh            # 52 checks driving headless Chrome over
+                                # CDP; --headful to watch. Owns its own
+                                # server. See tests/browser/KNOWN-ISSUES.md
+                                # for the one expected red check.
 ```
 
 There is no build step and no package.json. Deliberate — see below.
@@ -75,6 +79,17 @@ error that only shows up on 90°/270° pages and is miserable to eyeball.
   a token. pdf.js rejects two renders against one canvas.
 - Canvas backing store is at `scale * devicePixelRatio`; layout stays in
   logical px so the overlay's `pt * currentScale` math is unaffected.
+- **`state.lastFitMode` is not `state.zoomMode`.** The wheel keys off the
+  fit mode the user last *chose*; `zoomMode` flips to `'custom'` the moment
+  anything zooms, so reading it there would make one wheel-zoom in Fit W
+  silently change what the wheel does next.
+- **A trackpad pinch is a `wheel` event with `ctrlKey` set** and is
+  otherwise identical to a real Ctrl+wheel. `installStageGestures` tracks
+  whether Ctrl is physically down to tell them apart — needed because
+  Ctrl+wheel scrolls in Fit W, and without this pinch-to-zoom would break
+  in the default mode. Discrete wheels are also clamped and damped before
+  hitting the zoom curve; a raw `deltaY` of 120 through `exp(-Δ/100)` is a
+  3x jump per notch.
 
 ## Platform constraints
 
@@ -89,6 +104,9 @@ app-side code can override it.
 
 ## Scope
 
-Deferred, by decision: highlight / ink / arrow / shape tools, undo-redo,
-multi-select, text search. The module split is what makes adding them a
+Deferred, by decision: highlight / arrow / shape tools, undo-redo,
+multi-select, text search. (Freehand ink shipped — `type: 'ink'`, a
+point list in visual space; it takes its own branch in
+`drawAnnotationOnPage`, `remapAnnotationsForRotation` and
+`buildAnnoDom`, since it has no box, text or font size.) The module split is what makes adding them a
 contained change.

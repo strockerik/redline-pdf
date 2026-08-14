@@ -10,7 +10,11 @@ import {
   computeAttachPoint, computeArrowWings, ANNO_PAD, LINE_HEIGHT_MULT,
 } from './state.js';
 
-const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
+const { PDFDocument, StandardFonts, rgb, degrees, LineCapStyle } = PDFLib;
+
+// Round caps and joins are what make a chain of straight segments read as
+// one smooth pen stroke rather than a run of dashes.
+const ROUND_CAP = LineCapStyle.Round;
 
 /** pdf-lib does not wrap text; wrap against the real embedded font so
  *  the exported line breaks match what the editor showed. */
@@ -52,6 +56,24 @@ export function drawAnnotationOnPage(pdfPage, font, a, R, W0, H0) {
   const col = hexToRgb01(a.color);
   const color = rgb(col.r, col.g, col.b);
   const pad = ANNO_PAD;
+
+  // Ink is just a polyline: transform every point and stroke between
+  // them. No counter-rotation — only glyphs have an inherent "up".
+  if (a.type === 'ink') {
+    const pts = (a.points || []).map((p) => toNative(R, W0, H0, p.x, p.y));
+    if (!pts.length) return;
+    const thickness = a.size || 2.5;
+    // A single-point stroke (a tap) still deserves a dot, which a
+    // zero-length round-capped segment gives us.
+    if (pts.length === 1) pts.push(pts[0]);
+    for (let i = 1; i < pts.length; i++) {
+      pdfPage.drawLine({
+        start: pts[i - 1], end: pts[i],
+        thickness, color, lineCap: ROUND_CAP,
+      });
+    }
+    return;
+  }
   const lines = wrapTextForFont(toWinAnsi(a.text), font, a.fontSize, a.width - pad * 2);
   const lineHeight = a.fontSize * LINE_HEIGHT_MULT;
   const boxHeight = lines.length * lineHeight + pad * 2;

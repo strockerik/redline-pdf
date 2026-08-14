@@ -39,6 +39,7 @@ function computeScale(page) {
 
 export function setZoomMode(mode) {
   state.zoomMode = mode;
+  if (mode === 'fit-width' || mode === 'fit-page') state.lastFitMode = mode;
   renderMainCanvas();
 }
 
@@ -165,19 +166,77 @@ export async function renderMainCanvas(opts = {}) {
 // ============================================================
 // Gestures: pinch zoom, trackpad zoom, space-drag pan
 // ============================================================
-export function installStageGestures() {
+export function installStageGestures(onPageStep) {
   const stage = $('canvasStage');
   const pageStack = $('pageStack');
 
-  // --- Trackpad pinch and Cmd+wheel. A Mac trackpad pinch arrives as a
-  // wheel event with ctrlKey set; it never produces pointer events. ---
-  stage.addEventListener('wheel', (e) => {
-    if (!e.ctrlKey && !e.metaKey) return;
-    e.preventDefault();
+  // --- Wheel ---
+  //
+  // What a plain wheel does depends on the fit mode the user picked:
+  //
+  //            plain wheel     Ctrl + wheel
+  //   Fit Pg   change page     zoom
+  //   Fit W    zoom            scroll
+  //
+  // Cmd + wheel always zooms, whatever the mode.
+  //
+  // A Mac trackpad pinch arrives as a wheel event with ctrlKey set and is
+  // otherwise indistinguishable from a real Ctrl+wheel — so track whether
+  // Ctrl is physically down. Without this, pinch-to-zoom would silently
+  // turn into a scroll in Fit W, which is the default mode.
+  let ctrlHeld = false;
+  const syncCtrl = (e) => { ctrlHeld = e.ctrlKey; };
+  window.addEventListener('keydown', syncCtrl);
+  window.addEventListener('keyup', syncCtrl);
+  window.addEventListener('blur', () => { ctrlHeld = false; });
+
+  // A trackpad pinch arrives as many small deltas and wants to track the
+  // fingers exactly. A mouse wheel arrives as a few big ones — ~120 per
+  // notch, which through the same curve would be a 3x jump per click — so
+  // discrete wheels get clamped and damped to about 20% per notch.
+  const zoomBy = (e, fine) => {
     const rect = stage.getBoundingClientRect();
     const anchor = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-    const factor = Math.exp(-e.deltaY * 0.01);
-    setZoomLevel(state.zoomLevel * factor, anchor);
+    const d = fine ? e.deltaY
+                   : Math.max(-50, Math.min(50, e.deltaY)) * 0.35;
+    setZoomLevel(state.zoomLevel * Math.exp(-d * 0.01), anchor);
+  };
+
+  // One flick of a trackpad is a burst of small deltas, so accumulate to a
+  // threshold and then go deaf briefly — otherwise a single gesture would
+  // skate through half the document.
+  const PAGE_STEP_DELTA = 50;
+  const PAGE_STEP_COOLDOWN = 350;
+  const GESTURE_GAP = 200;
+  let accum = 0, lastWheelAt = 0, cooling = false;
+
+  const stepPages = (e) => {
+    const now = performance.now();
+    if (now - lastWheelAt > GESTURE_GAP) accum = 0;   // a new gesture
+    lastWheelAt = now;
+    if (cooling) return;                              // swallow momentum
+    // deltaMode 1 is lines, not pixels (some mice report it).
+    accum += e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+    if (Math.abs(accum) < PAGE_STEP_DELTA) return;
+    const dir = accum > 0 ? 1 : -1;
+    accum = 0;
+    cooling = true;
+    setTimeout(() => { cooling = false; }, PAGE_STEP_COOLDOWN);
+    onPageStep?.(dir);
+  };
+
+  stage.addEventListener('wheel', (e) => {
+    const pinch = e.ctrlKey && !ctrlHeld;             // trackpad, not the key
+    if (e.metaKey || pinch) { e.preventDefault(); zoomBy(e, pinch); return; }
+
+    if (state.lastFitMode === 'fit-page') {
+      e.preventDefault();
+      if (e.ctrlKey) zoomBy(e, false); else stepPages(e);
+    } else {
+      if (e.ctrlKey) return;                          // let the stage scroll
+      e.preventDefault();
+      zoomBy(e, false);
+    }
   }, { passive: false });
 
   // --- Two-finger pinch on a touchscreen ---
@@ -515,7 +574,7 @@ export function updateToolbarState() {
   const hasDoc = state.pages.length > 0;
 
   for (const id of ['btnRotateCCW', 'btnRotateCW', 'btnDeletePage', 'toolText', 'toolCallout',
-                    'btnZoomIn', 'btnZoomOut', 'btnFitWidth', 'btnFitPage']) {
+                    'toolPen', 'btnZoomIn', 'btnZoomOut', 'btnFitWidth', 'btnFitPage']) {
     const el = $(id);
     if (el) el.disabled = !hasPage;
   }

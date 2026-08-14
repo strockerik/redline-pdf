@@ -1,6 +1,6 @@
 /* Bootstrap: wire the DOM to the modules and boot the app. */
 import {
-  state, COLORS, resetDocument, setStatus, onDirtyChange,
+  state, COLORS, PEN_SIZES, resetDocument, setStatus, onDirtyChange,
 } from './state.js';
 import {
   renderThumbnails, renderMainCanvas, updateToolbarState, updateTitle,
@@ -13,7 +13,7 @@ import {
 } from './pages.js';
 import {
   setActiveTool, handleLayerClick, deleteAnnotation, deselectAnnotation,
-  applyAnnoStyle,
+  applyAnnoStyle, installPenDrawing,
 } from './annots.js';
 import {
   installLaunchHandler, installDragAndDrop, openViaPicker,
@@ -48,6 +48,30 @@ function buildColorSwatches() {
   }
 }
 
+function buildPenSizes() {
+  const grp = $('penSizeGrp');
+  if (!grp) return;
+  for (const p of PEN_SIZES) {
+    const b = document.createElement('button');
+    b.className = 'pen-dot' + (p.width === state.currentPenSize ? ' toggled' : '');
+    b.title = `${p.label} pen (${p.width}pt)`;
+    b.setAttribute('aria-label', `${p.label} pen`);
+    // Scaled up a little so the three presets are tellable apart at
+    // toolbar size; the number in the tooltip is the real width.
+    const dot = document.createElement('i');
+    const px = Math.max(3, Math.round(p.width * 2.2));
+    dot.style.width = px + 'px';
+    dot.style.height = px + 'px';
+    b.appendChild(dot);
+    b.addEventListener('click', () => {
+      applyAnnoStyle({ penSize: p.width });
+      grp.querySelectorAll('.pen-dot').forEach((n) => n.classList.remove('toggled'));
+      b.classList.add('toggled');
+    });
+    grp.appendChild(b);
+  }
+}
+
 // ============================================================
 // Pages drawer (narrow screens)
 // ============================================================
@@ -68,6 +92,18 @@ function installPagesDrawer() {
   });
   scrim.addEventListener('click', close);
   return { close };
+}
+
+// ============================================================
+// Page navigation — shared by the arrow keys and the scroll wheel
+// ============================================================
+function stepPage(dir) {
+  const idx = state.pages.findIndex((p) => p.id === state.selectedPageId);
+  if (idx < 0) return false;
+  const next = state.pages[idx + dir];
+  if (!next) return false;
+  selectPage(next.id);
+  return true;
 }
 
 // ============================================================
@@ -105,20 +141,22 @@ function installKeyboard() {
       if (page) deleteAnnotation(page, state.selectedAnnoId);
       return;
     }
-    if (e.key === 't' || e.key === 'T') {
+    const k = e.key.toLowerCase();
+    if (k === 't') {
       setActiveTool(state.activeTool === 'text' ? 'select' : 'text');
     }
-    if (e.key === 'l' || e.key === 'L') {
+    // Q is the documented callout shortcut; L still works out of habit.
+    if (k === 'q' || k === 'l') {
       setActiveTool(state.activeTool === 'callout' ? 'select' : 'callout');
+    }
+    if (k === 'p') {
+      setActiveTool(state.activeTool === 'pen' ? 'select' : 'pen');
     }
     // Page navigation
     if (e.key === 'ArrowDown' || e.key === 'ArrowRight' ||
         e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
-      const idx = state.pages.findIndex((p) => p.id === state.selectedPageId);
-      if (idx < 0) return;
       const dir = (e.key === 'ArrowDown' || e.key === 'ArrowRight') ? 1 : -1;
-      const next = state.pages[idx + dir];
-      if (next) { e.preventDefault(); selectPage(next.id); }
+      if (stepPage(dir)) e.preventDefault();
     }
   });
 }
@@ -154,6 +192,7 @@ function wireUi() {
   const drawer = installPagesDrawer();
 
   buildColorSwatches();
+  buildPenSizes();
   $('fontSizeSelect').value = String(state.currentFontSize);
   $('fontSizeSelect').addEventListener('change', (e) => {
     applyAnnoStyle({ fontSize: parseInt(e.target.value, 10) });
@@ -214,12 +253,15 @@ function wireUi() {
     setActiveTool(state.activeTool === 'text' ? 'select' : 'text'));
   $('toolCallout').addEventListener('click', () =>
     setActiveTool(state.activeTool === 'callout' ? 'select' : 'callout'));
+  $('toolPen').addEventListener('click', () =>
+    setActiveTool(state.activeTool === 'pen' ? 'select' : 'pen'));
   $('btnDeleteAnno').addEventListener('click', () => {
     if (!state.selectedAnnoId) return;
     const page = state.pages.find((p) => p.id === state.selectedPageId);
     if (page) deleteAnnotation(page, state.selectedAnnoId);
   });
   $('annoLayer').addEventListener('click', handleLayerClick);
+  installPenDrawing();
 
   // --- Zoom ---
   $('btnZoomIn').addEventListener('click', () => zoomStep(1));
@@ -228,7 +270,7 @@ function wireUi() {
   $('btnFitPage').addEventListener('click', () => setZoomMode('fit-page'));
   $('zoomReadout').addEventListener('click', () => setZoomLevel(1));
 
-  installStageGestures();
+  installStageGestures(stepPage);
   installDragAndDrop();
   installLaunchHandler();
   installKeyboard();

@@ -14,8 +14,9 @@ and it works with no network connection once installed.
 
 - **Assemble** — open one or more PDFs, insert blank pages (Letter /
   Legal / A4 / Tabloid), reorder by dragging thumbnails, rotate, delete.
-- **Mark up** — plain text boxes, and text boxes with a leader line
-  pointing at something. Five colors, six sizes.
+- **Mark up** — plain text boxes, text boxes with a leader line pointing
+  at something, and a freehand pen. Five colors, six text sizes, three
+  pen widths.
 - **Zoom** — fit width, fit page, 25–600% in steps, pinch on trackpad
   and touchscreen.
 - **Save** — write back over the file you opened (⌘S), or save a copy
@@ -51,11 +52,32 @@ sheet, and saving downloads to the Files app.
 | ⇧⌘S | Save As |
 | ⌘+ / ⌘− | Zoom in / out |
 | ⌘0 / ⌘9 | Fit width / fit page |
-| T / L | Text box / text with leader |
+| T / Q | Text box / text with leader |
+| P | Pen (freehand) |
 | Esc | Cancel tool, deselect |
 | Delete | Delete selected note |
 | ← → ↑ ↓ | Previous / next page |
 | Space + drag | Pan |
+
+`L` still works as an alias for `Q`.
+
+## Scrolling
+
+The **Fit W** / **Fit Pg** buttons also choose what the scroll wheel does:
+
+| | wheel | Ctrl + wheel |
+|---|---|---|
+| **Fit Pg** | previous / next page | zoom |
+| **Fit W** | zoom | scroll the page |
+
+⌘ + wheel always zooms, in either mode. A trackpad pinch always zooms too —
+it arrives as a Ctrl+wheel but is told apart from the real key, so
+pinch-to-zoom still works in Fit W where Ctrl+wheel scrolls.
+
+The choice sticks until you press the other button. Zooming drops you out of
+the fit itself (the button stops being lit), but the wheel keeps behaving the
+way you picked — otherwise one notch of wheel-zoom in Fit W would silently
+change what the wheel does next.
 
 ## Development
 
@@ -104,9 +126,24 @@ install. It covers the parts that are painful to verify by eye:
   non-WinAnsi characters, and that batched `copyPages` really is smaller
   than copying per page
 
-Rendering, gestures and DOM interaction are not covered and still need a
-browser. `?selftest` in the URL runs the rotation-math suite in-page and
-reports to the console.
+`?selftest` in the URL runs the rotation-math suite in-page and reports to
+the console.
+
+Rendering, gestures and DOM interaction need a real browser:
+
+```sh
+tests/browser/run.sh            # add --headful to watch it
+```
+
+52 checks driving headless Chrome over the DevTools Protocol — boot, import,
+rasterisation, zoom, rotate, drag-reorder, the wheel modes, tool shortcuts,
+save (⇧⌘S then ⌘S) and session restore, with screenshots at each stage in
+`tests/browser/shots/`. Needs Chrome and stdlib Python; no node, no npm. The
+only stubbed seam is `showSaveFilePicker`, so the export still runs for real
+and the bytes are reopened with pdf.js to prove they parse.
+
+One check is currently red against a known pre-existing bug — see
+`tests/browser/KNOWN-ISSUES.md`.
 
 ### The one genuinely hard part
 

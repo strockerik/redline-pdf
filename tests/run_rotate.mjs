@@ -128,4 +128,59 @@ for (const [from, to] of [[0, 90], [0, 180], [0, 270], [90, 270]]) {
   check('no drift after 40 full turns', worst < 1e-9, `max drift ${worst}`);
 }
 
+// --- 7. Ink strokes rotate with the page ---
+// Ink has no box, so it takes a different branch of the remap: every
+// point moves individually. Same invariants apply.
+const mkInkPage = () => ({
+  W0: 612, H0: 792, rotation: 0,
+  annotations: [{
+    id: 3, type: 'ink', color: '#000', size: 2.5,
+    points: [{ x: 100, y: 120 }, { x: 140, y: 180 }, { x: 260, y: 150 }],
+  }],
+});
+
+{
+  const page = mkInkPage();
+  const orig = JSON.parse(JSON.stringify(page.annotations[0].points));
+  let R = 0;
+  for (let i = 0; i < 4; i++) {
+    const next = normRot(R + 90);
+    remapAnnotationsForRotation(page, R, next);
+    R = next;
+  }
+  const pts = page.annotations[0].points;
+  let worst = 0;
+  for (let i = 0; i < orig.length; i++) {
+    worst = Math.max(worst, Math.abs(pts[i].x - orig[i].x), Math.abs(pts[i].y - orig[i].y));
+  }
+  check('ink returns to start after 4 rotations', worst < 1e-9, `max drift ${worst}`);
+}
+
+for (const R0 of [0, 90, 180, 270]) {
+  const page = mkInkPage();
+  const R1 = normRot(R0 + 90);
+  const before = JSON.parse(JSON.stringify(page.annotations[0].points));
+  remapAnnotationsForRotation(page, R0, R1);
+  const mid = page.annotations[0].points;
+
+  // Stays on the page, in the rotated page's own visual bounds.
+  const { w: Wv, h: Hv } = visualSize(R1, page.W0, page.H0);
+  const inside = mid.every((p) => p.x >= -0.01 && p.y >= -0.01 &&
+                                  p.x <= Wv + 0.01 && p.y <= Hv + 0.01);
+  check(`ink stays on the page ${R0}->${R1}`, inside,
+    mid.map((p) => `(${p.x.toFixed(1)},${p.y.toFixed(1)})`).join(' '));
+
+  // Rigid motion: the gaps between successive points must not change.
+  const seg = (a) => a.slice(1).map((p, i) => Math.hypot(p.x - a[i].x, p.y - a[i].y));
+  const d0 = seg(before), d1 = seg(mid);
+  const rigid = d0.every((d, i) => near(d, d1[i], 1e-9));
+  check(`ink segment lengths preserved ${R0}->${R1}`, rigid,
+    `${d0.map((d) => d.toFixed(3))} vs ${d1.map((d) => d.toFixed(3))}`);
+
+  remapAnnotationsForRotation(page, R1, R0);
+  const back = page.annotations[0].points;
+  const undone = before.every((p, i) => near(p.x, back[i].x) && near(p.y, back[i].y));
+  check(`ink CW then CCW is identity at R=${R0}`, undone);
+}
+
 print(failures ? `\n${failures} FAILURE(S)` : '\nAll rotate-remap checks passed');

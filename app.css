@@ -236,6 +236,19 @@ select, input[type=text]{
 .swatch:hover{ border-color:rgba(255,255,255,0.4); }
 .swatch.selected{ border-color:var(--white); box-shadow:0 0 0 2px var(--accent); }
 
+/* Pen widths. Always present, like the font Size control: showing this
+   only while the pen is active reflows the toolbar on every tool switch,
+   and that resize kicks off a re-render that races the thumbnail painter
+   (see tests/browser/KNOWN-ISSUES.md). A static toolbar avoids the whole
+   class of problem. */
+.pen-dot{
+  width:22px; height:22px; min-width:22px; padding:0;
+  display:flex; align-items:center; justify-content:center;
+  cursor:pointer;
+}
+.pen-dot i{ display:block; border-radius:50%; background:currentColor; }
+.pen-dot.toggled{ border-color:var(--white); box-shadow:0 0 0 2px var(--accent); }
+
 #canvasStage{
   flex:1;
   overflow:auto;
@@ -277,7 +290,13 @@ select, input[type=text]{
    deselects. Stage gestures (pinch, space-pan) still work because they
    listen on #canvasStage and these events bubble to it. */
 #annoLayer{ position:absolute; top:0; left:0; pointer-events:auto; }
-#annoLayer.tool-text, #annoLayer.tool-callout{ cursor:crosshair; }
+#annoLayer.tool-text, #annoLayer.tool-callout, #annoLayer.tool-pen{ cursor:crosshair; }
+/* While drawing, the layer must take the pointer itself — otherwise the
+   stroke under the cursor swallows the events mid-gesture. */
+#annoLayer.tool-pen{ pointer-events:auto; touch-action:none; }
+#annoLayer.tool-pen .ink-stroke{ pointer-events:none; }
+.ink-stroke{ pointer-events:stroke; cursor:pointer; }
+.ink-halo{ pointer-events:none; }
 #leaderSvg{
   position:absolute; top:0; left:0; width:100%; height:100%;
   overflow:visible; pointer-events:none;
