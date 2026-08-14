@@ -160,6 +160,12 @@ export function installPenDrawing() {
 
   layer.addEventListener('pointerdown', (e) => {
     if (state.activeTool !== 'pen') return;
+    // A right- or middle-click would otherwise commit a permanent one-point
+    // dot on the way to the context menu.
+    if (e.button !== 0) return;
+    // Space means "pan", even mid-drawing. Returning before the
+    // stopPropagation below is what lets the stage see this press.
+    if (state.spaceHeld) return;
     const page = state.pages.find((p) => p.id === state.selectedPageId);
     if (!page) return;
     e.preventDefault();
@@ -168,6 +174,7 @@ export function installPenDrawing() {
     stroke = {
       id: state.nextAnnoId++,
       type: 'ink',
+      pointerId: e.pointerId,
       color: state.currentColor,
       size: state.currentPenSize,
       points: [pointAt(e)],
@@ -178,7 +185,7 @@ export function installPenDrawing() {
   });
 
   layer.addEventListener('pointermove', (e) => {
-    if (!stroke) return;
+    if (!stroke || e.pointerId !== stroke.pointerId) return;
     e.preventDefault();
     const p = pointAt(e);
     const last = stroke.points[stroke.points.length - 1];
@@ -188,10 +195,12 @@ export function installPenDrawing() {
   });
 
   const finish = (e) => {
-    if (!stroke) return;
+    if (!stroke || e.pointerId !== stroke.pointerId) return;
     try { layer.releasePointerCapture(e.pointerId); } catch { /* already released */ }
     const page = state.pages.find((p) => p.id === state.selectedPageId);
-    const done = stroke;
+    // pointerId is drag bookkeeping, not part of the annotation — it must
+    // not reach IndexedDB or the exporter.
+    const { pointerId, ...done } = stroke;
     stroke = null;
     liveEl = null;
 

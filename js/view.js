@@ -232,8 +232,15 @@ export function installStageGestures(onPageStep) {
     if (state.lastFitMode === 'fit-page') {
       e.preventDefault();
       if (e.ctrlKey) zoomBy(e, false); else stepPages(e);
+    } else if (e.ctrlKey) {
+      // Ctrl+wheel scrolls in Fit W. It has to be done by hand: letting
+      // the event through means Chrome takes it as browser zoom, so the
+      // stage would never scroll and the whole page would resize instead.
+      e.preventDefault();
+      const k = e.deltaMode === 1 ? 16 : 1;
+      stage.scrollTop += e.deltaY * k;
+      stage.scrollLeft += e.deltaX * k;
     } else {
-      if (e.ctrlKey) return;                          // let the stage scroll
       e.preventDefault();
       zoomBy(e, false);
     }
@@ -306,12 +313,17 @@ export function installStageGestures(onPageStep) {
   window.addEventListener('keydown', (e) => {
     if (e.code === 'Space' && !e.repeat && !isTypingTarget(e.target)) {
       spaceDown = true;
+      state.spaceHeld = true;
       stage.classList.add('pannable');
       e.preventDefault();
     }
   });
   window.addEventListener('keyup', (e) => {
-    if (e.code === 'Space') { spaceDown = false; stage.classList.remove('pannable'); }
+    if (e.code === 'Space') {
+      spaceDown = false;
+      state.spaceHeld = false;
+      stage.classList.remove('pannable');
+    }
   });
 
   /** Anything with its own drag gesture keeps it — panning must not
@@ -321,12 +333,32 @@ export function installStageGestures(onPageStep) {
        target.classList?.contains('ink-stroke') ||
        target.classList?.contains('tip-handle'));
 
+  // Set when a pan actually moved, so the click that ends the drag can be
+  // swallowed. A flag rather than a one-shot listener: a drag ended by
+  // pointercancel never produces that click, and the listener would sit
+  // armed and eat an unrelated click later.
+  let swallowClick = false;
+  stage.addEventListener('click', (e) => {
+    if (!swallowClick) return;
+    swallowClick = false;
+    e.stopPropagation();
+    e.preventDefault();
+  }, { capture: true });
+
   stage.addEventListener('pointerdown', (e) => {
     if (e.pointerType === 'touch') return;          // native scroll handles touch
-    if (e.button !== 0) return;
+    if (e.button !== 0) return;                     // right/middle keep the menu
     if (!spaceDown && state.activeTool !== 'select') return;
-    if (!spaceDown && ownsTheDrag(e.target)) return;
-    e.preventDefault();
+    // Notes keep their own drag even under Space — panning and the note's
+    // own move gesture at once dragged it at roughly double speed.
+    if (ownsTheDrag(e.target)) return;
+    // Deliberately no preventDefault here. It suppresses the compat
+    // mousedown and with it the focus change, so an open note would never
+    // blur: typing kept landing in it, and every single-key shortcut
+    // stayed dead because isTypingTarget still saw a focused
+    // contenteditable. Text selection is suppressed from pointermove
+    // instead, once this is genuinely a drag.
+    swallowClick = false;
     panning = {
       x: e.clientX, y: e.clientY, id: e.pointerId,
       sl: stage.scrollLeft, st: stage.scrollTop, moved: false,
@@ -344,26 +376,28 @@ export function installStageGestures(onPageStep) {
       stage.classList.add('panning');
       try { stage.setPointerCapture(panning.id); } catch { /* not capturable */ }
     }
+    e.preventDefault();                             // no text selection mid-pan
     stage.scrollLeft = panning.sl - dx;
     stage.scrollTop = panning.st - dy;
   });
   const endPan = (e) => {
     if (!panning) return;
-    const dragged = panning.moved;
+    // Only a real pointerup produces the trailing click worth swallowing.
+    swallowClick = panning.moved && e.type === 'pointerup';
     panning = null;
     stage.classList.remove('panning');
     try { stage.releasePointerCapture(e.pointerId); } catch { /* already released */ }
-    // A drag ends in a click too. Swallow that one, or panning across the
-    // page would also deselect whatever was selected.
-    if (dragged) {
-      stage.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        ev.preventDefault();
-      }, { capture: true, once: true });
-    }
   };
   stage.addEventListener('pointerup', endPan);
   stage.addEventListener('pointercancel', endPan);
+
+  // A keyup lands on whoever has focus; switching apps mid-hold would
+  // otherwise leave the app stuck in pan mode forever.
+  window.addEventListener('blur', () => {
+    spaceDown = false;
+    state.spaceHeld = false;
+    stage.classList.remove('pannable');
+  });
 }
 
 export function isTypingTarget(el) {

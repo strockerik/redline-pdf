@@ -65,11 +65,21 @@ function buildPenSizes() {
     b.appendChild(dot);
     b.addEventListener('click', () => {
       applyAnnoStyle({ penSize: p.width });
-      grp.querySelectorAll('.pen-dot').forEach((n) => n.classList.remove('toggled'));
-      b.classList.add('toggled');
+      syncPenSizeUi();
     });
     grp.appendChild(b);
   }
+}
+
+/** Re-mark the active preset from state. The toolbar is built before
+ *  restoreSession() overwrites currentPenSize, so without this the
+ *  highlight can disagree with the width the pen will actually draw. */
+function syncPenSizeUi() {
+  const grp = $('penSizeGrp');
+  if (!grp) return;
+  grp.querySelectorAll('.pen-dot').forEach((n, i) => {
+    n.classList.toggle('toggled', PEN_SIZES[i].width === state.currentPenSize);
+  });
 }
 
 // ============================================================
@@ -141,6 +151,10 @@ function installKeyboard() {
       if (page) deleteAnnotation(page, state.selectedAnnoId);
       return;
     }
+    // Single-key tool shortcuts only. Without this, ⌘P switched to the pen
+    // on the way to the print dialog, and ⌘Q/⌃T likewise picked up a tool.
+    if (mod || e.altKey) return;
+
     const k = e.key.toLowerCase();
     if (k === 't') {
       setActiveTool(state.activeTool === 'text' ? 'select' : 'text');
@@ -317,6 +331,7 @@ async function boot() {
   try {
     const snap = await loadSession();
     if (snap && await restoreSession(snap)) {
+      syncPenSizeUi();
       renderThumbnails();
       renderMainCanvas();
       updateTitle();

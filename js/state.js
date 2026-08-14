@@ -52,6 +52,9 @@ export const state = {
   selectedPageId: null,
   selectedAnnoId: null,
   activeTool: 'select',     // 'select' | 'text' | 'callout' | 'pen'
+  // Space forces pan, whatever the active tool. Shared so the pen can
+  // stand aside for it instead of swallowing the press.
+  spaceHeld: false,
   pendingCalloutTip: null,  // {x,y} in pt, while placing a callout
 
   currentColor: COLORS[0],

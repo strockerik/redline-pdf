@@ -57,11 +57,34 @@ Mitigated by making the pen size presets permanent toolbar furniture
 removes the trigger, not the underlying race: **any** real resize — a
 window drag, an orientation change — can still hit it.
 
-**Likely fix.** Serialise pdf.js rendering so the main canvas and the
-thumbnail loop never render the same page concurrently — either one shared
-render queue, or a per-page-index promise chain. A single global queue is
-simplest but would make zoom wait on the whole thumbnail rail, so the
-per-page chain is probably the better trade.
+**The concurrent-render theory is wrong — tried and disproved.** The
+obvious fix was implemented and reverted: a promise chain keyed by
+`sourceId:pageIndex`, taken by both `renderMainCanvas` and
+`paintThumbCanvas`, so the two can never render the same page proxy at
+once. The probe was unchanged with it in place:
+
+```
+getPage: resolved   thumbCanvases: 0   render: HUNG
+```
+
+So it is not two renders racing over one page. Serialising them only
+makes the thumbnail loop queue up behind the main canvas, which is
+itself already stuck — `thumbCanvases: 0` is a *consequence* of the main
+render hanging, not independent evidence of a race.
+
+What that leaves: the first `pjPage.render()` after a restore never
+settles on its own, while `getPage` on the same document still answers.
+Worth investigating next, roughly in order of cheapness —
+
+1. Whether the RenderTask is being cancelled by the `activeRenderTask`
+   cancel path just before it is awaited, so nothing ever settles it
+   (add logging around `task.promise` and the cancel call).
+2. Whether the restored `pdfjsDoc` is built on bytes another consumer
+   has since detached — `getPage` resolving from cached structure would
+   not prove the data is still there, but rasterising needs it.
+3. Whether it reproduces with the thumbnail rail disabled entirely; if
+   it does, the thumbnails are irrelevant and this note's title is
+   wrong.
 
 This touches the render core, so it wants `tests/run.sh` plus this suite
 run before and after.

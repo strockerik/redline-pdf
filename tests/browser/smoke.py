@@ -523,6 +523,35 @@ def main():
         check("pan releases cleanly",
               ev(ws, "document.getElementById('canvasStage').classList.contains('panning')") is False)
 
+        # Regression: pan used to preventDefault on pointerdown, which
+        # suppresses the compat mousedown and with it the focus change. An
+        # open note then never blurred — typing kept landing in it and every
+        # single-key shortcut stayed dead, with nothing on screen to say so.
+        ev(ws, """(() => {
+          const el = document.createElement('div');
+          el.id = 'focusProbe';
+          el.contentEditable = 'true';
+          el.style.cssText = 'position:absolute;left:4px;top:4px;width:60px;height:20px;z-index:9';
+          document.getElementById('annoLayer').appendChild(el);
+          el.focus();
+        })()""")
+        check("probe holds focus", ev(ws, "document.activeElement.id") == "focusProbe")
+        px, py = stage_point(0.5, 0.5)
+        for t in ("mousePressed", "mouseReleased"):
+            ws.call("Input.dispatchMouseEvent", {"type": t, "x": px, "y": py,
+                                                 "button": "left", "clickCount": 1})
+        time.sleep(0.3)
+        check("clicking the page blurs an open note",
+              ev(ws, "document.activeElement.id") != "focusProbe",
+              f"activeElement = {ev(ws, 'document.activeElement.id || document.activeElement.tagName')}")
+        ev(ws, "document.getElementById('focusProbe')?.remove()")
+
+        # (Ctrl+wheel in Fit W is covered by "Fit W: ctrl+wheel scrolls the
+        # stage" above. Note that check passed even while the handler was
+        # letting the event through: headless Chrome has no browser zoom, so
+        # the stage scrolled natively. A real Chrome would have zoomed the
+        # whole page instead — the handler now scrolls explicitly.)
+
         # ---------------------------------------------- 6c. pen
         print("\n=== pen ===")
         TOOLBAR_H = ev(ws, "document.getElementById('pageToolbar').getBoundingClientRect().height")
