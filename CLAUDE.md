@@ -36,12 +36,24 @@ js/pages.js     import, blank pages, delete, rotate, reorder
 js/view.js      page canvas, zoom, thumbnails, reorder gesture
 js/annots.js    text box + callout tools, pointer interactions
 js/export.js    pdf-lib output
+js/tabs.js      document tabs: the open-document list and switching
 js/main.js      wiring and boot
 ```
 
 `view.js` and `annots.js` import each other. That cycle is fine because
 nothing runs at module-evaluation time — but don't add top-level side
 effects to either.
+
+**Tabs hold whole documents, and `state` holds the active one.** Every
+per-document field (`pages`, `sources`, `docName`, `fileHandle`,
+`combined`, the `next*Id` counters) lives on `state` as it always did;
+`state.docs` holds the records and switching swaps the fields in and out
+via `captureActiveDoc` / `loadDocIntoState` in state.js. So view.js,
+annots.js, pages.js and export.js never learned about tabs. Two
+consequences worth knowing: **capture before you read a doc record** —
+the active tab's record is stale between switches, which is why
+`snapshot()` calls `captureActiveDoc()` first — and **page ids restart
+per document**, so the thumbnail cache must be flushed on a switch.
 
 ## The part that breaks if you're careless
 

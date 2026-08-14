@@ -14,6 +14,10 @@ and it works with no network connection once installed.
 
 - **Assemble** — open one or more PDFs, insert blank pages (Letter /
   Legal / A4 / Tabloid), reorder by dragging thumbnails, rotate, delete.
+- **Tabs** — **Open** merges the files you pick into the current
+  document; **Open in Tabs…** (⇧⌘O) gives each its own tab instead, with
+  its own pages, notes and save target. ⌘T opens an empty one. The strip
+  appears only once a second document is open.
 - **Mark up** — plain text boxes, text boxes with a leader line pointing
   at something, and a freehand pen. Five colors, six text sizes, three
   pen widths.
@@ -49,7 +53,8 @@ sheet, and saving downloads to the Files app.
 
 | | |
 |---|---|
-| ⌘O | Open |
+| ⌘O / ⇧⌘O | Open merged / open in tabs |
+| ⌘T | New tab |
 | ⌘S | Save over the opened file |
 | ⇧⌘S | Save As |
 | ⌘+ / ⌘− | Zoom in / out |

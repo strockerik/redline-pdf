@@ -8,6 +8,7 @@
  */
 import { state, setStatus, markDirty } from './state.js';
 import { importPdfBytes, importPdfFile } from './pages.js';
+import { docForNewFile, renderTabs } from './tabs.js';
 import { buildPdfBytes } from './export.js';
 import { updateTitle } from './view.js';
 
@@ -56,6 +57,66 @@ export function installLaunchHandler() {
       }
     }
   });
+}
+
+/** Open each file as its own document instead of merging them.
+ *
+ *  The merging path is unchanged and still the default — this is the
+ *  other half of the choice. Each file lands in its own tab, so each one
+ *  keeps its own save target and ⌘S means what it says.
+ */
+export async function openInTabs(entries) {
+  let opened = 0;
+  for (const entry of entries) {
+    // Fill the current tab if it is still empty, so choosing "open in
+    // tabs" from a blank app doesn't leave an unused tab at the front.
+    docForNewFile();
+    try {
+      const ok = entry.handle
+        ? await openFromHandle(entry.handle)
+        : await importPdfFile(entry.file);
+      if (ok !== null) opened++;
+    } catch (err) {
+      console.error(err);
+      setStatus(`Couldn't open that file: ${err.message || err}`, 'err');
+    }
+  }
+  renderTabs();
+  updateTitle();
+  if (opened) {
+    setStatus(`Opened ${opened} document${opened === 1 ? '' : 's'} in tabs.`, 'ok');
+  }
+  return opened;
+}
+
+export async function openViaPickerInTabs() {
+  if (!canUseFileSystemAccess || !('showOpenFilePicker' in window)) {
+    // No picker here, so reuse the plain file input and route its result
+    // through the tab path instead of the merging one.
+    pendingInputMode = 'tabs';
+    document.getElementById('fileInput').click();
+    return;
+  }
+  try {
+    const handles = await window.showOpenFilePicker({
+      types: PDF_PICKER_TYPES,
+      multiple: true,
+    });
+    await openInTabs(handles.map((handle) => ({ handle })));
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    console.error(err);
+    setStatus(`Couldn't open: ${err.message || err}`, 'err');
+  }
+}
+
+// The <input type=file> fallback is shared by both open modes, so it has
+// to be told which one asked for it.
+let pendingInputMode = 'merge';
+export function takeInputMode() {
+  const mode = pendingInputMode;
+  pendingInputMode = 'merge';
+  return mode;
 }
 
 export async function openViaPicker() {

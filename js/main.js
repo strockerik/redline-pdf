@@ -17,8 +17,13 @@ import {
 } from './annots.js';
 import {
   installLaunchHandler, installDragAndDrop, openViaPicker,
+  openViaPickerInTabs, openInTabs, takeInputMode,
   save, saveAs, downloadCopy, canUseFileSystemAccess,
 } from './files.js';
+import {
+  installTabs, ensureInitialDoc, openDocument, renderTabs, refreshActiveTab,
+  setTabsChangeHandler,
+} from './tabs.js';
 import {
   scheduleSave, clearSession, loadSession, restoreSession,
   installAutosaveTriggers,
@@ -130,7 +135,19 @@ function installKeyboard() {
       e.shiftKey ? saveAs() : save();
       return;
     }
-    if (mod && e.key.toLowerCase() === 'o') { e.preventDefault(); openViaPicker(); return; }
+    if (mod && e.key.toLowerCase() === 'o') {
+      e.preventDefault();
+      e.shiftKey ? openViaPickerInTabs() : openViaPicker();
+      return;
+    }
+    if (mod && e.key.toLowerCase() === 't') {
+      e.preventDefault();
+      openDocument();
+      updateTitle();
+      renderThumbnails();
+      renderMainCanvas();
+      return;
+    }
 
     if (mod && (e.key === '=' || e.key === '+')) { e.preventDefault(); zoomStep(1); return; }
     if (mod && e.key === '-') { e.preventDefault(); zoomStep(-1); return; }
@@ -215,9 +232,16 @@ function wireUi() {
 
   // --- Open ---
   $('btnOpen').addEventListener('click', openViaPicker);
+  $('btnOpenTabs').addEventListener('click', openViaPickerInTabs);
   $('fileInput').addEventListener('change', async (e) => {
-    for (const f of e.target.files) await importPdfFile(f);
+    const files = [...e.target.files];
     e.target.value = '';
+    // The same input serves both open modes; whichever asked for it says so.
+    if (takeInputMode() === 'tabs') {
+      await openInTabs(files.map((file) => ({ file })));
+    } else {
+      for (const f of files) await importPdfFile(f);
+    }
   });
 
   // --- Save ---
@@ -286,6 +310,8 @@ function wireUi() {
   $('zoomReadout').addEventListener('click', () => setZoomLevel(1));
 
   installStageGestures(stepPage);
+  installTabs();
+  setTabsChangeHandler(() => scheduleSave());
   installDragAndDrop();
   installLaunchHandler();
   installKeyboard();
@@ -302,6 +328,7 @@ function wireUi() {
   // Autosave and the title dot both hang off the dirty flag.
   onDirtyChange((dirty) => {
     updateTitle();
+    refreshActiveTab();
     if (dirty) scheduleSave();
   });
 
@@ -332,6 +359,10 @@ async function boot() {
   try {
     const snap = await loadSession();
     if (snap && await restoreSession(snap)) {
+      // restoreSession fills state.docs itself; this only covers the
+      // single-document case where it did not.
+      ensureInitialDoc();
+      renderTabs();
       syncPenSizeUi();
       renderThumbnails();
       renderMainCanvas();
@@ -344,6 +375,8 @@ async function boot() {
     console.error('session restore failed', err);
   }
 
+  ensureInitialDoc();
+  renderTabs();
   renderThumbnails();
   renderMainCanvas();
 }

@@ -31,7 +31,8 @@
     <div class="divider"></div>
 
     <div class="hdr-group">
-      <button id="btnOpen" title="Open a PDF (⌘O)">Open</button>
+      <button id="btnOpen" title="Open one or more PDFs, merged into this document (⌘O)">Open</button>
+      <button id="btnOpenTabs" title="Open each PDF in its own tab (⇧⌘O)">Open in Tabs…</button>
       <button id="btnSave" class="primary" title="Save over the file you opened (⌘S)">Save</button>
       <button id="btnSaveAs" title="Save to a new file (⇧⌘S)">Save As…</button>
       <button id="btnDownload" class="primary" title="Download the edited PDF">⬇ Download</button>
@@ -55,6 +56,11 @@
 
     <div id="statusMsg" role="status" aria-live="polite"></div>
   </header>
+
+  <div id="tabBar">
+    <div id="tabStrip"></div>
+    <button id="btnNewTab" title="New empty document (⌘T)" aria-label="New document">+</button>
+  </div>
 
   <div id="body">
     <aside id="sidebar">

@@ -83,7 +83,60 @@ export const state = {
   // where to put it rather than overwrite whichever file came first.
   combined: false,
   dirty: false,
+
+  // Tabs. `docs` holds every open document; the one whose id is
+  // activeDocId owns the live fields above.
+  docs: [],
+  activeDocId: null,
+  nextDocId: 1,
 };
+
+// ============================================================
+// Open documents (tabs)
+//
+// `state` always holds the *active* document's fields, so every other
+// module goes on reading state.pages / state.docName exactly as before
+// and switching a tab just swaps those fields out. The alternative —
+// threading a document argument through view, annots, pages and export —
+// would touch nearly every function in the app for no behavioural gain.
+// ============================================================
+export const DOC_FIELDS = [
+  'sources', 'pages', 'nextSourceId', 'nextPageId', 'nextAnnoId',
+  'selectedPageId', 'selectedAnnoId', 'docName', 'fileHandle',
+  'combined', 'dirty',
+];
+
+export function blankDoc() {
+  return {
+    id: state.nextDocId++,
+    sources: [], pages: [],
+    nextSourceId: 1, nextPageId: 1, nextAnnoId: 1,
+    selectedPageId: null, selectedAnnoId: null,
+    docName: 'Untitled.pdf', fileHandle: null,
+    combined: false, dirty: false,
+  };
+}
+
+/** Copy the live fields back into the active document's record. Call
+ *  before switching away, or the edits since the last switch are lost. */
+export function captureActiveDoc() {
+  const doc = state.docs.find((d) => d.id === state.activeDocId);
+  if (!doc) return null;
+  for (const k of DOC_FIELDS) doc[k] = state[k];
+  return doc;
+}
+
+export function loadDocIntoState(doc) {
+  for (const k of DOC_FIELDS) state[k] = doc[k];
+  state.activeDocId = doc.id;
+  // Per-document DOM bookkeeping; the layer is rebuilt for the new doc.
+  state.pendingCalloutTip = null;
+  state.domRefs = {};
+}
+
+export function activeDoc() {
+  return state.docs.find((d) => d.id === state.activeDocId) || null;
+}
 
 /** Reset everything except UI preferences (color, font size, zoom). */
 export function resetDocument() {
