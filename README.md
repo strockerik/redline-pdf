@@ -126,11 +126,16 @@ docs/build-guide.md     the original design spec
 ### Tests
 
 ```sh
-tests/run.sh
+tests/run.sh        # unit — JavaScriptCore, ships with macOS
+tests/analyze.py    # static — Python 3, stdlib only
 ```
 
-Runs under JavaScriptCore, which ships with macOS — no node, no
-install. It covers the parts that are painful to verify by eye:
+`run.sh` needs no install at all. `analyze.py` reads the source rather
+than running it, and catches the class of mistake a behavioural test
+cannot see: import cycles, exports nobody imports, DOM ids that do not
+exist, root-absolute paths that would 404 on Pages, files missing from the
+service worker's precache list, and `state` fields that would leak from
+one document tab into another. It covers the parts that are painful to verify by eye:
 
 - the visual ↔ native coordinate round-trip for all four rotations
 - where annotation rectangles, text baselines and leader lines actually
@@ -150,7 +155,7 @@ Rendering, gestures and DOM interaction need a real browser:
 tests/browser/run.sh            # add --headful to watch it
 ```
 
-52 checks driving headless Chrome over the DevTools Protocol — boot, import,
+Checks driving headless Chrome over the DevTools Protocol — boot, import,
 rasterisation, zoom, rotate, drag-reorder, the wheel modes, tool shortcuts,
 save (⇧⌘S then ⌘S) and session restore, with screenshots at each stage in
 `tests/browser/shots/`. Needs Chrome and stdlib Python; no node, no npm. The

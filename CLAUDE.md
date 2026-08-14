@@ -11,15 +11,24 @@ PWA, hosted on GitHub Pages, runs entirely client-side.
 ```sh
 python3 -m http.server 8000     # must be http — ES modules and service
                                 # workers do not run from file://
-tests/run.sh                    # 78 checks under JavaScriptCore (ships
+tests/run.sh                    # unit checks under JavaScriptCore (ships
                                 # with macOS; no node, no npm)
-tests/browser/run.sh            # 52 checks driving headless Chrome over
-                                # CDP; --headful to watch. Owns its own
+tests/browser/run.sh            # integration checks driving headless Chrome
+                                # over CDP; --headful to watch. Owns its own
                                 # server. See tests/browser/KNOWN-ISSUES.md
                                 # for the one expected red check.
+tests/analyze.py                # static checks: import cycles, dead exports,
+                                # missing DOM ids, absolute paths, service-
+                                # worker precache drift, tab field leaks.
+                                # Python 3, stdlib only.
 ```
 
 There is no build step and no package.json. Deliberate — see below.
+
+Counts drift, so they are not written down here; each script prints its
+own total. `/audit` runs all three and reviews the result against
+`.claude/skills/audit/references/hazards.md`, a catalogue of the traps
+this codebase has actually fallen into.
 
 ## Architecture
 

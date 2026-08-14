@@ -4,7 +4,7 @@
  * code is the classic PWA failure; the version bump plus the
  * delete-everything-else pass in `activate` is what prevents it.
  */
-const CACHE = 'redline-v9';
+const CACHE = 'redline-v10';
 
 const PRECACHE = [
   './',
@@ -26,6 +26,8 @@ const PRECACHE = [
   './vendor/pdf.worker.min.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
+  './icons/icon-192-maskable.png',
+  './icons/icon-512-maskable.png',
   './icons/apple-touch-icon.png',
   './icons/favicon.png',
 ];
