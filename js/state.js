@@ -100,7 +100,7 @@ export const state = {
 // threading a document argument through view, annots, pages and export —
 // would touch nearly every function in the app for no behavioural gain.
 // ============================================================
-export const DOC_FIELDS = [
+const DOC_FIELDS = [
   'sources', 'pages', 'nextSourceId', 'nextPageId', 'nextAnnoId',
   'selectedPageId', 'selectedAnnoId', 'docName', 'fileHandle',
   'combined', 'dirty',
@@ -203,7 +203,7 @@ const measureCanvas = document.createElement('canvas');
 /** Word-wrap using canvas 2D metrics. Used only for the on-screen
  *  height estimate needed when repositioning notes during a page
  *  rotate; export wraps against the real embedded PDF font instead. */
-export function measureWrapCanvas(text, maxWidth, fontSize) {
+function measureWrapCanvas(text, maxWidth, fontSize) {
   const ctx = measureCanvas.getContext('2d');
   ctx.font = `${fontSize}px ${getComputedStyle(document.body).fontFamily}`;
   const paragraphs = String(text || '').split('\n');

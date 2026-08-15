@@ -395,7 +395,7 @@ function startTipDrag(e, page, a) {
 // ============================================================
 // Leader line rendering
 // ============================================================
-export function updateLeaderVisual(page, a) {
+function updateLeaderVisual(page, a) {
   const refs = state.domRefs[a.id];
   if (!refs || a.type !== 'callout' || !refs.lineEl) return;
 

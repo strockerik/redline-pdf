@@ -113,6 +113,18 @@ discards work.
   structured-cloneable, a screenshot taken after the state changed, a
   coordinate computed against a scrolled canvas — all produced convincing
   false findings here.
+- **A red check can be an environment artifact, and the expensive one
+  already happened.** Headless Chrome stops compositing an unattended page
+  partway through a long run. `requestAnimationFrame` stops firing with
+  it, and pdf.js continues multi-chunk canvas renders from rAF — so every
+  render stalls forever while promises keep resolving, because microtasks
+  do not need a frame. That looked exactly like an app-level render
+  deadlock, and was treated as one for months: it shaped the pen's toolbar
+  layout and pushed whole sections of the suite into a second browser
+  instance. The tell was that `getOperatorList` resolved while a
+  *throwaway* canvas would not paint. **Before theorising about any render
+  stall, run it headful.** The suite defaults to a real window for this
+  reason.
 - New behaviour with no coverage is itself a finding.
 
 ## 7. Coordinate space

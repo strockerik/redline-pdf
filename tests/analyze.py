@@ -408,10 +408,17 @@ def check_doc_fields():
     # line-anchored regex silently misses half of them.
     declared = set(re.findall(r"[{,\n]\s*(\w+):", body))
 
-    doc_fields = set(re.findall(r"'(\w+)'",
-                                src[src.index("export const DOC_FIELDS"):
-                                    src.index("export function blankDoc")]))
-    blank = src[src.index("export function blankDoc"):src.index("export function captureActiveDoc")]
+    # Anchor on the declarations, not on "export " — these are module-
+    # private now, and hardcoding the keyword made this crash the moment
+    # the redundant exports were dropped.
+    def at(needle):
+        m = re.search(rf"^(?:export )?{needle}", src, re.M)
+        if not m:
+            raise SystemExit(f"analyze.py: cannot locate {needle} in state.js")
+        return m.start()
+
+    doc_fields = set(re.findall(r"'(\w+)'", src[at("const DOC_FIELDS"):at("function blankDoc")]))
+    blank = src[at("function blankDoc"):at("function captureActiveDoc")]
     blank_fields = set(re.findall(r"[{,\n]\s*(\w+):", blank)) - {"id"}
 
     unclassified = sorted(declared - doc_fields - APP_WIDE_STATE)

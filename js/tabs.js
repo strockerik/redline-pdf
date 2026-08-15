@@ -54,7 +54,7 @@ export function docForNewFile() {
   return openDocument();
 }
 
-export function switchToDoc(id) {
+function switchToDoc(id) {
   if (id === state.activeDocId) return;
   const target = state.docs.find((d) => d.id === id);
   if (!target) return;
@@ -71,7 +71,7 @@ export function switchToDoc(id) {
   onChange?.();
 }
 
-export function closeDoc(id) {
+function closeDoc(id) {
   const idx = state.docs.findIndex((d) => d.id === id);
   if (idx < 0) return;
   const doc = state.docs[idx];

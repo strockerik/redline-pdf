@@ -7,6 +7,7 @@
 import {
   state, setStatus, captureActiveDoc, loadDocIntoState,
 } from './state.js';
+import { pdfWorker } from './pages.js';
 
 const DB_NAME = 'redline';
 const DB_VERSION = 1;
@@ -93,7 +94,7 @@ function snapshot() {
   };
 }
 
-export async function saveSession() {
+async function saveSession() {
   try {
     const snap = snapshot();
     await tx('readwrite', (store) => store.put(snap, KEY));
@@ -147,7 +148,9 @@ async function reviveDoc(d) {
       // the buffer it's handed, so each consumer gets its own copy and
       // the pristine original is kept for the next save.
       const pdfLibDoc = await PDFDocument.load(s.bytes.slice(0), { ignoreEncryption: true });
-      const pdfjsDoc = await pdfjsLib.getDocument({ data: s.bytes.slice(0) }).promise;
+      const pdfjsDoc = await pdfjsLib.getDocument({
+        data: s.bytes.slice(0), worker: pdfWorker(),
+      }).promise;
       sources.push({ id: s.id, name: s.name, bytes: s.bytes, pdfLibDoc, pdfjsDoc });
     } catch (err) {
       console.error(`couldn't restore source ${s.name}`, err);

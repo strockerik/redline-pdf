@@ -57,7 +57,7 @@ export function zoomStep(dir) {
   if (next) setZoomLevel(next);
 }
 
-export function updateZoomReadout() {
+function updateZoomReadout() {
   const el = $('zoomReadout');
   if (el) el.textContent = Math.round(state.zoomLevel * 100) + '%';
   $('btnFitWidth')?.classList.toggle('toggled', state.zoomMode === 'fit-width');

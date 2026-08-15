@@ -140,18 +140,17 @@ def wheel(ws, dy, ctrl=False, meta=False, pinch=False):
     time.sleep(0.5)
 
 
-def raf_alive(ws, where):
-    """Diagnostic, kept for the next time renders mysteriously stall.
-
-    Is the page still producing frames? pdf.js continues multi-chunk
-    renders from requestAnimationFrame, so a page that stops compositing
-    stops rendering — while promises still resolve, which makes it look
-    like a deadlock."""
-    v = ev(ws, """(async () => Promise.race([
-        new Promise(r => requestAnimationFrame(() => r('fires'))),
-        new Promise(r => setTimeout(() => r('STARVED'), 2000))]))()""", True)
-    print(f"      rAF @ {where}: {v}")
-    return v
+RAF_PROBE = r"""
+// Is the page still producing frames? pdf.js continues multi-chunk renders
+// from requestAnimationFrame, so a page that has stopped compositing stops
+// rendering — while promises still resolve, which makes a stalled renderer
+// look like a deadlock. Headless Chrome does this partway through a long
+// run; see KNOWN-ISSUES.md.
+window.__rafAlive = () => Promise.race([
+  new Promise(r => requestAnimationFrame(() => r('fires'))),
+  new Promise(r => setTimeout(() => r('STARVED'), 2500)),
+]);
+"""
 
 
 def sel(ws):
@@ -491,7 +490,7 @@ def main():
         ws.call("Runtime.enable")
         ws.call("Page.enable")
         ws.call("Log.enable")
-        ws.call("Page.addScriptToEvaluateOnNewDocument", {"source": STUB})
+        ws.call("Page.addScriptToEvaluateOnNewDocument", {"source": STUB + RAF_PROBE})
 
         # ---------------------------------------------- 1. boot
         print("\n=== boot ===")
@@ -1019,9 +1018,7 @@ def main():
                 numPages: src.pdfjsDoc.numPages,
                 getPage: await t(src.pdfjsDoc.getPage(page.sourcePageIndex + 1), 5000),
                 thumbCanvases: document.querySelectorAll('#thumbList canvas').length,
-                rAF: await Promise.race([
-                  new Promise(r => requestAnimationFrame(() => r('fires'))),
-                  new Promise(r => setTimeout(() => r('STARVED'), 2500))]),
+                rAF: await window.__rafAlive(),
                 oplist: await t(pg.getOperatorList(), 5000),
                 freshCanvas: await t(
                   pg.render({ canvasContext: fresh.getContext('2d'), viewport: vp }).promise, 6000),
@@ -1099,7 +1096,7 @@ def main():
         ws3 = cdp.WS(cdp.page_target(9224)["webSocketDebuggerUrl"])
         ws3.call("Runtime.enable")
         ws3.call("Page.enable")
-        ws3.call("Page.addScriptToEvaluateOnNewDocument", {"source": TABS_STUB})
+        ws3.call("Page.addScriptToEvaluateOnNewDocument", {"source": TABS_STUB + RAF_PROBE})
         ws3.call("Page.navigate", {"url": URL})
         wait_for(ws3, "document.querySelectorAll('#colorGrp .swatch').length > 0",
                  timeout=30, label="tabs app booted")

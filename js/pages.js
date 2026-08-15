@@ -10,6 +10,18 @@ import {
 
 const { PDFDocument } = PDFLib;
 
+// One Web Worker for every document. pdf.js starts a dedicated worker per
+// getDocument() call, and nothing here ever destroys a document — a
+// moderate session left 27 worker threads alive. Sharing one costs
+// nothing: it is a message pump, and pdf.js multiplexes documents over it.
+// Created lazily so importing this module stays side-effect free, and so
+// GlobalWorkerOptions.workerSrc (set in main.js) is in place first.
+let sharedWorker = null;
+export function pdfWorker() {
+  if (!sharedWorker) sharedWorker = new pdfjsLib.PDFWorker({ name: 'redline' });
+  return sharedWorker;
+}
+
 // ============================================================
 // Import
 // ============================================================
@@ -20,7 +32,9 @@ export async function importPdfBytes(bytes, name) {
     // pdf.js transfers (and detaches) the buffer it is handed, so every
     // consumer — including a future session restore — needs its own copy.
     const pdfLibDoc = await PDFDocument.load(bytes.slice(0), { ignoreEncryption: true });
-    const pdfjsDoc = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+    const pdfjsDoc = await pdfjsLib.getDocument({
+      data: bytes.slice(0), worker: pdfWorker(),
+    }).promise;
 
     const sourceId = state.nextSourceId++;
     state.sources.push({ id: sourceId, name, bytes, pdfLibDoc, pdfjsDoc });

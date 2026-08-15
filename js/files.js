@@ -24,7 +24,7 @@ const PDF_PICKER_TYPES = [{
 // ============================================================
 /** Open from a FileSystemFileHandle — the Finder / picker path. The
  *  handle is retained so ⌘S can write straight back to it. */
-export async function openFromHandle(handle, { asPrimary = true } = {}) {
+async function openFromHandle(handle, { asPrimary = true } = {}) {
   const file = await handle.getFile();
   const bytes = await file.arrayBuffer();
   const first = await importPdfBytes(bytes, file.name);
