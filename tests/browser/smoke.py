@@ -259,6 +259,118 @@ window.__reopenSaved = async (i) => {
 """
 
 
+# Stub for the Open in Tabs picker. Same shape as the save-panel stub: the
+# handle's methods are non-enumerable so it stays structured-cloneable, or
+# the autosave that this section exists to test would fail on the handle
+# rather than on anything real.
+TABS_STUB = r"""
+window.showOpenFilePicker = async () => {
+  const res = await fetch('./tests/browser/fixture.pdf');
+  const buf = await res.arrayBuffer();
+  const mk = (name) => {
+    const h = { kind: 'file', name };
+    Object.defineProperty(h, 'getFile', {
+      enumerable: false,
+      value: async () => new File([buf.slice(0)], name, { type: 'application/pdf' }),
+    });
+    return h;
+  };
+  return [mk('alpha.pdf'), mk('beta.pdf')];
+};
+"""
+
+
+def tab_checks(ws):
+    """Open in Tabs, and the thing most likely to lose work quietly: two
+    open documents autosaving over each other.
+
+    Runs in its own browser instance — tabs change what a "document" is, so
+    the single-document assumptions of the main flow do not survive it.
+    """
+    print("\n=== document tabs ===")
+
+    def docs():
+        return ev(ws, """(async () => {
+          const s = await import('./js/state.js');
+          return {
+            n: s.state.docs.length,
+            active: s.state.docName,
+            pages: s.state.pages.length,
+            all: s.state.docs.map(d => d.docName + ':' +
+                 (d.id === s.state.activeDocId ? s.state.pages.length : d.pages.length)),
+          };
+        })()""", awaitp=True)
+
+    check("starts as a single document", docs()["n"] == 1, str(docs()))
+    check("tab strip hidden with one document",
+          ev(ws, "document.getElementById('tabBar').classList.contains('show')") is False)
+
+    click(ws, "#btnOpenTabs")
+    wait_for(ws, "document.querySelectorAll('#tabStrip .tab').length === 2",
+             timeout=30, label="two files opened as two tabs")
+    time.sleep(1.5)
+    d = docs()
+    check("two files become two documents, not one merge", d["n"] == 2, str(d))
+    check("each keeps its own pages — 3 and 3, not 6",
+          d["all"] == ["alpha.pdf:3", "beta.pdf:3"], str(d["all"]))
+    check("the empty starting tab was reused",
+          ev(ws, "document.querySelectorAll('#tabStrip .tab').length") == 2)
+    check("tab strip appears with a second document",
+          ev(ws, "document.getElementById('tabBar').classList.contains('show')") is True)
+    check("the active document is the last opened", d["active"] == "beta.pdf", d["active"])
+
+    # Make the two documents differ, so a restore that mixes them up is
+    # visible rather than a coincidence.
+    click(ws, "#btnAddBlank")
+    time.sleep(1.2)
+    check("editing affects only the active document",
+          docs()["all"] == ["alpha.pdf:3", "beta.pdf:4"], str(docs()["all"]))
+
+    click(ws, "#tabStrip .tab:first-child")
+    time.sleep(1.5)
+    d = docs()
+    check("switching tabs swaps the document", d["active"] == "alpha.pdf", d["active"])
+    check("and swaps the page list", d["pages"] == 3, f"{d['pages']} pages")
+    check("the title follows the tab",
+          ev(ws, "document.getElementById('docTitle').textContent") == "alpha.pdf")
+    check("thumbnails belong to the newly active document",
+          ev(ws, "document.querySelectorAll('#thumbList .thumb').length") == 3,
+          f"{ev(ws, 'document.querySelectorAll(\'#thumbList .thumb\').length')} thumbs")
+    shot(ws, "09-tabs")
+
+    # --- the part that would lose work quietly ---
+    # Both documents autosave to one IndexedDB record. If the snapshot took
+    # a stale copy of the inactive tab, or wrote only the active one, the
+    # reload below brings back the wrong thing.
+    ev(ws, """(async () => {
+      const p = await import('./js/persist.js');
+      const s = await import('./js/state.js');
+      await p.flushSave();
+      // A dirty document raises the beforeunload dialog, which blocks
+      // Page.navigate until CDP dismisses it — a harness trap, not a bug.
+      s.markDirty(false);
+    })()""", awaitp=True)
+
+    ws.call("Page.navigate", {"url": URL})
+    wait_for(ws, "!!document.getElementById('pageCanvas')")
+    ok = wait_for(ws, "document.querySelectorAll('#tabStrip .tab').length === 2", timeout=30)
+    check("both documents come back after a reload", ok,
+          ev(ws, "document.getElementById('statusMsg').textContent"))
+    time.sleep(1.5)
+    d = docs()
+    check("neither tab clobbered the other's autosave",
+          sorted(d["all"]) == ["alpha.pdf:3", "beta.pdf:4"], str(d["all"]))
+
+    close = ev(ws, "!!document.querySelector('#tabStrip .tab .tab-close')")
+    check("tabs offer a close control", close is True)
+    if close:
+        click(ws, "#tabStrip .tab:first-child .tab-close")
+        time.sleep(1.2)
+        check("closing a document leaves the other", docs()["n"] == 1, str(docs()))
+        check("tab strip hides again at one document",
+              ev(ws, "document.getElementById('tabBar').classList.contains('show')") is False)
+
+
 def zoom_mode_checks(ws):
     """Double-click latches the wheel into zooming, Bluebeam style.
 
@@ -936,6 +1048,29 @@ def main():
         except Exception:
             pass
         shutil.rmtree(profile2, ignore_errors=True)
+
+    # --- tabs, in a third instance ---------------------------------
+    profile3 = tempfile.mkdtemp(prefix="redline-smoke-")
+    proc3 = cdp.launch("about:blank", 9224, profile3, headless=HEADLESS)
+    try:
+        ws3 = cdp.WS(cdp.page_target(9224)["webSocketDebuggerUrl"])
+        ws3.call("Runtime.enable")
+        ws3.call("Page.enable")
+        ws3.call("Page.addScriptToEvaluateOnNewDocument", {"source": TABS_STUB})
+        ws3.call("Page.navigate", {"url": URL})
+        wait_for(ws3, "document.querySelectorAll('#colorGrp .swatch').length > 0",
+                 timeout=30, label="tabs app booted")
+        time.sleep(1)
+        tab_checks(ws3)
+    except TimeoutError:
+        failed += 1
+        print("FAIL  the renderer stopped answering during the tab checks")
+    finally:
+        try:
+            proc3.terminate()
+        except Exception:
+            pass
+        shutil.rmtree(profile3, ignore_errors=True)
 
     print(f"\n{passed} passed, {failed} failed")
     print(f"screenshots: {SHOTS}")
