@@ -126,8 +126,11 @@ app-side code can override it.
 ## Scope
 
 Deferred, by decision: highlight / arrow / shape tools, undo-redo,
-multi-select, text search. (Freehand ink shipped — `type: 'ink'`, a
-point list in visual space; it takes its own branch in
-`drawAnnotationOnPage`, `remapAnnotationsForRotation` and
-`buildAnnoDom`, since it has no box, text or font size.) The module split is what makes adding them a
-contained change.
+multi-select, text search. The module split is what keeps adding any of
+them a contained change.
+
+Shipped since: freehand ink (`type: 'ink'`, a point list in visual space;
+it takes its own branch in `drawAnnotationOnPage`,
+`remapAnnotationsForRotation` and `buildAnnoDom`, having no box, text or
+font size) and document tabs (see the architecture note above — the rest
+of the app never learned about them).

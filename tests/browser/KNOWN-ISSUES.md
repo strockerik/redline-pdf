@@ -2,15 +2,16 @@
 
 ## RESOLVED — the "render deadlock" was never an app bug
 
-**Status:** closed. The suite now runs **86 passed, 0 failed**.
+**Status:** closed. The suite runs green; it has no expected failures.
 
 For a long time this file described a render deadlock in the app: after a
 session restore the main canvas stayed blank and the thumbnails never
 painted, so it read as "my document lost its pages". It was the suite's one
 permanent red check, and it shaped a lot of decisions — the pen's size
 presets were made permanent toolbar furniture to avoid a reflow "trigger",
-and the wheel-zoom checks were moved into a second browser instance to stay
-clear of a supposed render-capacity limit.
+and the wheel-zoom checks were exiled to a second browser instance to stay
+clear of a supposed render-capacity limit. That isolation has since been
+undone; the checks run in the main pass again.
 
 **All of that was chasing a headless-Chrome artifact.**
 
@@ -35,7 +36,7 @@ stalls forever — while promises keep resolving, because microtasks do not
 need a frame. That last detail is what made it look like a deadlock instead
 of a stalled renderer.
 
-The same suite in a real window: **86 passed, 0 failed.** No app change was
+The same suite in a real window: green, every check. No app change was
 needed to get there.
 
 Instrumenting each section showed rAF dying between the reorder and pen
@@ -56,10 +57,9 @@ Recorded so nobody spends another session on them:
    *consequence* of the main render stalling, not evidence of a race.
 2. **The cancel path wedging it.** Awaiting the cancelled task's promise
    before starting the next render changed nothing.
-3. **Leaked pdf.js workers.** The app never calls `destroy()`, so documents
-   and their workers do accumulate — 27 live workers in one measurement.
-   Real, and worth fixing for memory, but not this: 24 documents created
-   back-to-back all rendered fine.
+3. **Leaked pdf.js workers.** 27 live workers in one measurement — real,
+   and since fixed by sharing one `PDFWorker` (below). But not the cause
+   of this: 24 documents created back-to-back all rendered fine.
 4. **The detached-ArrayBuffer trap.** `sourceBytes` was always intact.
 
 ### What was a real bug, found on the way
@@ -83,12 +83,18 @@ and zooms render *different* pages to the *same* canvas, so a lock keyed by
 page provides no mutual exclusion. The constraint pdf.js enforces is one
 render per **canvas**.
 
-## Open: pdf.js documents are never destroyed
+## Mostly closed: pdf.js document lifetime
 
-`js/pages.js` and `js/persist.js` both call `pdfjsLib.getDocument(...)` and
-nothing ever calls `.destroy()`. Each document keeps a Web Worker alive —
-27 of them after a moderate session. Not the cause of anything above, and
-harmless in short use, but a long session with many files and tab switches
-will accumulate them. The fix is either a `destroy()` on documents that get
-replaced (re-import, tab close, restore) or a single shared `PDFWorker`
-passed to every `getDocument` call.
+pdf.js used to start a dedicated Web Worker per `getDocument()` call, and
+since nothing here calls `.destroy()`, a moderate session left **27 live
+worker threads**. `js/pages.js` now exports a lazily-created shared
+`PDFWorker` that both it and `js/persist.js` pass to every `getDocument`.
+Re-measured with the same 24-document probe: **27 worker targets -> 4**,
+and that 4 includes the service worker.
+
+Still open, but bounded: the *documents* are still never destroyed, so
+their parsed structures and byte copies stay in memory until the tab goes
+away. That grows with what the user actually opens rather than with every
+render, which is why it is logged rather than fixed — adding `destroy()`
+calls to the re-import, tab-close and restore paths is real complexity in
+the load path for a leak nobody has hit.

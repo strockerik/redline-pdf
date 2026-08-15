@@ -416,10 +416,11 @@ def tab_checks(ws):
 def zoom_mode_checks(ws):
     """Double-click latches the wheel into zooming, Bluebeam style.
 
-    Runs in its own browser instance. These checks add a burst of
-    renders, and doing that anywhere inside the main run pushes the
-    KNOWN-ISSUES deadlock forward far enough to wedge the reorder
-    section — which costs ~45 later checks. Isolating it keeps both.
+    These once ran in a browser instance of their own: the extra renders
+    appeared to push a "render deadlock" forward and cost ~45 later
+    checks. That deadlock turned out to be headless Chrome dropping
+    requestAnimationFrame (KNOWN-ISSUES.md), so the isolation was
+    protecting against nothing. Back in the main run.
     """
     print("\n=== double-click wheel zoom ===")
     time.sleep(1.0)
@@ -712,6 +713,8 @@ def main():
         check("trackpad pinch still zooms in Fit W", za != zb, f"{za} -> {zb}")
 
         # --- Tool shortcuts ---
+        zoom_mode_checks(ws)
+
         print("\n=== tool shortcuts ===")
         key(ws, "q", "KeyQ", 81)
         check("Q activates the callout tool",
@@ -1056,44 +1059,13 @@ def main():
             pass
         shutil.rmtree(profile, ignore_errors=True)
 
-    # --- second phase: its own browser, for the reason in the docstring ---
-    print("\n=== double-click wheel zoom (isolated) ===")
-    profile2 = tempfile.mkdtemp(prefix="redline-smoke-zm-")
-    proc2 = cdp.launch("about:blank", 9223, profile2, headless=HEADLESS)
-    try:
-        t2 = cdp.page_target(9223)
-        ws2 = cdp.WS(t2["webSocketDebuggerUrl"])
-        ws2.call("Runtime.enable")
-        ws2.call("Page.enable")
-        ws2.call("Page.navigate", {"url": URL})
-        # The toolbar is built at the end of boot, so a swatch existing is
-        # the signal that the module graph is up — #pageCanvas is in the
-        # static markup and says nothing about whether the app booted.
-        wait_for(ws2, "document.querySelectorAll('#colorGrp .swatch').length > 0",
-                 timeout=30, label="zoom-mode app booted")
-        time.sleep(0.5)
-        d2 = ws2.call("DOM.getDocument")["root"]["nodeId"]
-        f2 = ws2.call("DOM.querySelector", {"nodeId": d2, "selector": "#fileInput"})["nodeId"]
-        ws2.call("DOM.setFileInputFiles", {"nodeId": f2, "files": [FIXTURE]})
-        wait_for(ws2, "document.querySelectorAll('#thumbList .thumb').length === 3",
-                 timeout=30, label="zoom-mode import")
-        time.sleep(1.5)
-        zoom_mode_checks(ws2)
-    except TimeoutError:
-        failed += 1
-        print("FAIL  the renderer stopped answering during the zoom-mode checks")
-    finally:
-        try:
-            proc2.terminate()
-        except Exception:
-            pass
-        shutil.rmtree(profile2, ignore_errors=True)
-
-    # --- tabs, in a third instance ---------------------------------
+    # --- tabs, in a second instance --------------------------------
+    # This isolation is real: tabs change what "a document" means, and the
+    # single-document assumptions above do not survive it.
     profile3 = tempfile.mkdtemp(prefix="redline-smoke-")
-    proc3 = cdp.launch("about:blank", 9224, profile3, headless=HEADLESS)
+    proc3 = cdp.launch("about:blank", 9223, profile3, headless=HEADLESS)
     try:
-        ws3 = cdp.WS(cdp.page_target(9224)["webSocketDebuggerUrl"])
+        ws3 = cdp.WS(cdp.page_target(9223)["webSocketDebuggerUrl"])
         ws3.call("Runtime.enable")
         ws3.call("Page.enable")
         ws3.call("Page.addScriptToEvaluateOnNewDocument", {"source": TABS_STUB + RAF_PROBE})
