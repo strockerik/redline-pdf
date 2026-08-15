@@ -47,9 +47,11 @@ tests/run.sh                 # must be green before you believe anything else
 If this is red, stop and report that. Every behavioural claim below is
 worthless against a broken baseline.
 
-`tests/browser/run.sh` takes about two minutes and **must end
-`86 passed, 0 failed`**. Any red check is a real regression — this suite
-has no expected failures. It opens a real Chrome window on purpose;
+`tests/browser/run.sh` takes about two minutes and **must end with
+`0 failed`**. Any red check is a real regression — this suite has no
+expected failures. The passing count grows as checks are added, so it is
+deliberately not written down here; compare it against the run before
+your change. It opens a real Chrome window on purpose;
 `--headless` is faster but stalls pdf.js mid-render, so a failure under it
 means nothing until you have reproduced it headful.
 
@@ -88,8 +90,8 @@ Two traps specific to this harness:
   that got mistaken for an app deadlock for months. So ask of a green
   check *would this pass for the same reason in real Chrome?*, and of a
   red one *does it still fail headful?*
-- **Watch the check count, not just the failures.** A total below 86 with
-  no matching FAIL means the run died early rather than passing.
+- **Watch the check count, not just the failures.** A total that drops
+  without a matching FAIL means the run died early rather than passing.
 
 ### 5. Report
 
@@ -119,8 +121,9 @@ With `--fix`, after applying:
 tests/analyze.py && tests/run.sh && tests/browser/run.sh
 ```
 
-The browser suite must still end `86 passed, 0 failed`. A different total
-means something moved; investigate before claiming the fix is done.
+The browser suite must still end `0 failed`, with no fewer checks than
+before your change. A drop means something moved; investigate before
+claiming the fix is done.
 
 If a fix touches the service worker or any precached file, bump `CACHE` in
 `sw.js`. `tests/analyze.py` warns when it is stale, and an installed app

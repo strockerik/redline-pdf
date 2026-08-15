@@ -361,6 +361,30 @@ def tab_checks(ws):
     check("neither tab clobbered the other's autosave",
           sorted(d["all"]) == ["alpha.pdf:3", "beta.pdf:4"], str(d["all"]))
 
+    # Clear All empties the active document. It must not take the other
+    # tabs' saved copies with it — they share one IndexedDB record, and
+    # deleting it wiped work that was still sitting on screen looking fine.
+    stored = """(async () => {
+      const p = await import('./js/persist.js');
+      const snap = await p.loadSession();
+      return snap ? snap.docs.map(d => d.docName + ':' + d.pages.length).join(', ')
+                  : '<NO RECORD>';
+    })()"""
+    ev(ws, """(async () => {
+      const p = await import('./js/persist.js');
+      await p.flushSave();
+    })()""", awaitp=True)
+    active = ev(ws, "(async()=>(await import('./js/state.js')).state.docName)()", awaitp=True)
+    other = "beta.pdf" if active == "alpha.pdf" else "alpha.pdf"
+    ev(ws, "window.confirm = () => true")
+    click(ws, "#btnClearAll")
+    time.sleep(2.5)
+    rec = str(ev(ws, stored, awaitp=True))
+    check("Clear All keeps the other tab's saved copy",
+          other in rec and rec != "<NO RECORD>", f"cleared {active}; record now: {rec}")
+    check("Clear All did empty the active document",
+          docs()["pages"] == 0, str(docs()))
+
     close = ev(ws, "!!document.querySelector('#tabStrip .tab .tab-close')")
     check("tabs offer a close control", close is True)
     if close:

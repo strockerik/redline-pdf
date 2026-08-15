@@ -1,6 +1,7 @@
 /* Bootstrap: wire the DOM to the modules and boot the app. */
 import {
-  state, COLORS, PEN_SIZES, resetDocument, setStatus, onDirtyChange,
+  state, COLORS, PEN_SIZES, resetDocument, captureActiveDoc,
+  setStatus, onDirtyChange,
 } from './state.js';
 import {
   renderThumbnails, renderMainCanvas, updateToolbarState, updateTitle,
@@ -25,7 +26,7 @@ import {
   setTabsChangeHandler,
 } from './tabs.js';
 import {
-  scheduleSave, clearSession, loadSession, restoreSession,
+  scheduleSave, flushSave, clearSession, loadSession, restoreSession,
   installAutosaveTriggers,
 } from './persist.js';
 
@@ -273,7 +274,22 @@ function wireUi() {
     if (!clearAll()) return;
     resetDocument();
     invalidateAllThumbs();
-    await clearSession();
+
+    // Clear All empties *this* document. It used to delete the whole
+    // session record, which is shared by every tab — so clearing one
+    // document silently threw away the saved copy of all the others,
+    // while they sat there on screen looking fine.
+    //
+    // Capture first: the active document's record still holds its
+    // pre-clear pages until it does, and the check below reads records.
+    captureActiveDoc();
+    if (state.docs.some((d) => d.pages.length)) {
+      await flushSave();          // other tabs still have work worth keeping
+    } else {
+      await clearSession();       // genuinely nothing left to remember
+    }
+
+    renderTabs();
     updateTitle();
     renderThumbnails();
     renderMainCanvas();

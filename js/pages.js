@@ -215,7 +215,8 @@ export function selectPage(pageId) {
 
 export function clearAll() {
   if (!state.pages.length) return;
-  if (!confirm('Remove all pages and start over? This cannot be undone.')) return false;
+  if (!confirm('Remove all pages from this document and start over? '
+              + 'This cannot be undone.')) return false;
   invalidateAllThumbs();
   return true;
 }
