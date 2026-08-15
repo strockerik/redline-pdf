@@ -47,11 +47,11 @@ tests/run.sh                 # must be green before you believe anything else
 If this is red, stop and report that. Every behavioural claim below is
 worthless against a broken baseline.
 
-`tests/browser/run.sh` takes about two minutes and **is expected to end
-`85 passed, 1 failed`**. That one red check is the render deadlock. Before
-going near it, read `tests/browser/KNOWN-ISSUES.md`: three hypotheses are
-already tried and disproved there, including the obvious one. Do not
-re-run those experiments.
+`tests/browser/run.sh` takes about two minutes and **must end
+`86 passed, 0 failed`**. Any red check is a real regression — this suite
+has no expected failures. It opens a real Chrome window on purpose;
+`--headless` is faster but stalls pdf.js mid-render, so a failure under it
+means nothing until you have reproduced it headful.
 
 ### 3. Read the target against the hazard catalogue
 
@@ -79,18 +79,17 @@ Never present PLAUSIBLE as CONFIRMED. Two confident-sounding hypotheses
 about this codebase turned out to be wrong on contact with the browser,
 and both cost more to unwind than they would have to check.
 
-Three traps specific to this harness:
+Two traps specific to this harness:
 
-- **Headless Chrome is not real Chrome.** No browser zoom, no window
-  chrome, different device pixel ratio. Ask of any green check: *would
-  this pass for the same reason in real Chrome?* A Ctrl+wheel bug hid here
-  for exactly this reason.
-- **Watch the check count, not just the failures.** The app runs close to
-  a render-capacity limit. Adding renders anywhere can move the deadlock
-  earlier and silently cost dozens of later checks. If the total drops,
-  suspect the wedge moved rather than assuming your change broke things.
-- **Render-heavy new checks get their own browser instance** — see
-  `zoom_mode_checks` in `smoke.py` for the pattern.
+- **Headless Chrome is not real Chrome, in both directions.** It has no
+  browser zoom, which once hid a Ctrl+wheel bug behind a green check. It
+  also stops compositing partway through a long run, which starves
+  `requestAnimationFrame` and stalls every pdf.js render — a false failure
+  that got mistaken for an app deadlock for months. So ask of a green
+  check *would this pass for the same reason in real Chrome?*, and of a
+  red one *does it still fail headful?*
+- **Watch the check count, not just the failures.** A total below 86 with
+  no matching FAIL means the run died early rather than passing.
 
 ### 5. Report
 
@@ -120,9 +119,8 @@ With `--fix`, after applying:
 tests/analyze.py && tests/run.sh && tests/browser/run.sh
 ```
 
-The browser suite must still end `85 passed, 1 failed` — same count, same
-single known failure. A different total means something moved; investigate
-before claiming the fix is done.
+The browser suite must still end `86 passed, 0 failed`. A different total
+means something moved; investigate before claiming the fix is done.
 
 If a fix touches the service worker or any precached file, bump `CACHE` in
 `sw.js`. `tests/analyze.py` warns when it is stale, and an installed app

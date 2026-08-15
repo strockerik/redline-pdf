@@ -9,7 +9,12 @@ import cdp
 
 PORT = int(os.environ.get("PORT", "8000"))
 URL = f"http://localhost:{PORT}/"
-HEADLESS = "--headful" not in sys.argv
+# Headful by default. Headless Chrome stops compositing partway through a
+# long run; requestAnimationFrame stops with it, and pdf.js continues
+# multi-chunk renders from rAF — so renders stall and the app looks broken
+# when it is not. See KNOWN-ISSUES.md. --headless is opt-in and faster, but
+# expect the session-restore check to fail spuriously.
+HEADLESS = "--headless" in sys.argv
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURE = os.path.join(HERE, "fixture.pdf")
 SHOTS = os.path.join(HERE, "shots")
@@ -133,6 +138,20 @@ def wheel(ws, dy, ctrl=False, meta=False, pinch=False):
             "type": "keyUp", "key": "Control", "code": "ControlLeft",
             "windowsVirtualKeyCode": 17, "nativeVirtualKeyCode": 17, "modifiers": 0})
     time.sleep(0.5)
+
+
+def raf_alive(ws, where):
+    """Diagnostic, kept for the next time renders mysteriously stall.
+
+    Is the page still producing frames? pdf.js continues multi-chunk
+    renders from requestAnimationFrame, so a page that stops compositing
+    stops rendering — while promises still resolve, which makes it look
+    like a deadlock."""
+    v = ev(ws, """(async () => Promise.race([
+        new Promise(r => requestAnimationFrame(() => r('fires'))),
+        new Promise(r => setTimeout(() => r('STARVED'), 2000))]))()""", True)
+    print(f"      rAF @ {where}: {v}")
+    return v
 
 
 def sel(ws):
@@ -833,11 +852,24 @@ def main():
                 new Promise(r => setTimeout(() => r('HUNG'), ms))]);
               const page = s.state.pages.find(p => p.id === s.state.selectedPageId);
               const src = s.state.sources.find(x => x.id === page.sourceId);
+              // Bypass both the render queue and the shared canvas: if a
+              // throwaway canvas paints fine, the document and worker are
+              // healthy and the fault is ours, not pdf.js's.
+              const pg = await src.pdfjsDoc.getPage(page.sourcePageIndex + 1);
+              const vp = pg.getViewport({ scale: 1 });
+              const fresh = document.createElement('canvas');
+              fresh.width = Math.ceil(vp.width); fresh.height = Math.ceil(vp.height);
               return {
                 sourceBytes: src.bytes.byteLength,      // data intact?
                 numPages: src.pdfjsDoc.numPages,
                 getPage: await t(src.pdfjsDoc.getPage(page.sourcePageIndex + 1), 5000),
                 thumbCanvases: document.querySelectorAll('#thumbList canvas').length,
+                rAF: await Promise.race([
+                  new Promise(r => requestAnimationFrame(() => r('fires'))),
+                  new Promise(r => setTimeout(() => r('STARVED'), 2500))]),
+                oplist: await t(pg.getOperatorList(), 5000),
+                freshCanvas: await t(
+                  pg.render({ canvasContext: fresh.getContext('2d'), viewport: vp }).promise, 6000),
                 render: await t(v.renderMainCanvas(), 8000),
               };
             })()""", awaitp=True))

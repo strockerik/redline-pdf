@@ -94,11 +94,25 @@ export function setWheelZoom(on) {
 // ============================================================
 let renderToken = 0;
 let activeRenderTask = null;
+// Everything that touches #pageCanvas runs through here, one at a time.
+let renderQueue = Promise.resolve();
 
-/** Render the selected page. Safe to call repeatedly and concurrently —
- *  pdf.js rejects two renders against one canvas, so the previous task
- *  is cancelled and stale results are dropped via the token. */
-export async function renderMainCanvas(opts = {}) {
+/** Render the selected page. Safe to call repeatedly and concurrently.
+ *
+ *  pdf.js permits exactly one render per canvas, and `cancel()` is *not*
+ *  synchronous — the task keeps the canvas until its promise settles.
+ *  Cancelling and immediately starting the next render therefore throws
+ *
+ *      Cannot use the same canvas during multiple render() operations
+ *
+ *  which aborts this function before it reaches the sizing below, leaving
+ *  the canvas at its old dimensions and the annotation overlay on pre-zoom
+ *  coordinates — the "my document lost its pages" failure. Serialising per
+ *  *canvas* is what matters: rapid page switches and zooms render
+ *  different pages to the same one, so a lock keyed by page gives no
+ *  mutual exclusion at all.
+ */
+export function renderMainCanvas(opts = {}) {
   const page = state.pages.find((p) => p.id === state.selectedPageId);
   const emptyState = $('emptyState');
   const pageStack = $('pageStack');
@@ -108,17 +122,28 @@ export async function renderMainCanvas(opts = {}) {
   if (!page) {
     emptyState.style.display = 'block';
     pageStack.style.display = 'none';
-    return;
+    return Promise.resolve();
   }
   emptyState.style.display = 'none';
   pageStack.style.display = 'block';
 
   const token = ++renderToken;
+  // Ask the in-flight render to wind up so the queue drains promptly. The
+  // *waiting* is the queue's job, not ours.
   if (activeRenderTask) {
     try { activeRenderTask.cancel(); } catch { /* already settled */ }
-    activeRenderTask = null;
   }
 
+  const run = renderQueue.then(() => paintPage(page, token, opts));
+  renderQueue = run.then(() => {}, () => {});   // a failure must not jam the queue
+  return run;
+}
+
+async function paintPage(page, token, opts) {
+  // Superseded while queued: a newer call is already on its way.
+  if (token !== renderToken) return;
+
+  const pageStack = $('pageStack');
   const { w: Wv, h: Hv } = visualSize(page.rotation, page.W0, page.H0);
   const scale = computeScale(page);
   state.currentScale = scale;
@@ -159,7 +184,10 @@ export async function renderMainCanvas(opts = {}) {
       await task.promise;
     } catch (err) {
       if (err && err.name === 'RenderingCancelledException') return;
-      throw err;
+      // Loud, but not fatal: one failed render must not reject the promise
+      // every caller ignores, and must not stop the queue.
+      console.error('page render failed', err);
+      return;
     } finally {
       if (activeRenderTask === task) activeRenderTask = null;
     }

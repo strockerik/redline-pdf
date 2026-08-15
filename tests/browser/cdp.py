@@ -138,8 +138,17 @@ def launch(url, port, profile, headless=True):
         f"--remote-debugging-port={port}",
         f"--user-data-dir={profile}",
         "--no-first-run", "--no-default-browser-check",
-        "--disable-features=Translate,MediaRouter",
+        "--disable-features=Translate,MediaRouter,CalculateNativeWinOcclusion",
         "--window-size=1440,900",
+        # Keep the renderer producing frames. An unfocused or occluded
+        # headless page stops compositing, and with it requestAnimationFrame
+        # — which pdf.js uses to continue a multi-chunk canvas render. The
+        # render then never settles, and the page looks like it lost its
+        # content. That artifact was mistaken for an app-level render
+        # deadlock for a long time; see KNOWN-ISSUES.md.
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
     ]
     if headless:
         args.append("--headless=new")

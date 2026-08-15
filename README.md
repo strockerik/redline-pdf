@@ -152,10 +152,10 @@ the console.
 Rendering, gestures and DOM interaction need a real browser:
 
 ```sh
-tests/browser/run.sh            # add --headful to watch it
+tests/browser/run.sh            # add --headless for speed (see below)
 ```
 
-Checks driving headless Chrome over the DevTools Protocol — boot, import,
+Checks driving Chrome over the DevTools Protocol — boot, import,
 rasterisation, zoom, rotate, drag-reorder, the wheel modes, tool shortcuts,
 save (⇧⌘S then ⌘S) and session restore, with screenshots at each stage in
 `tests/browser/shots/`. Needs Chrome and stdlib Python; no node, no npm. The

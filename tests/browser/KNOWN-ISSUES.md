@@ -1,102 +1,94 @@
 # Known issues found by the browser suite
 
-## Render pipeline deadlocks on session restore
+## RESOLVED — the "render deadlock" was never an app bug
 
-**Status:** open, pre-existing (reproduces identically on `7956179`, before
-the scroll/shortcut work). Currently the one red check in `run.sh`.
+**Status:** closed. The suite now runs **86 passed, 0 failed**.
 
-**Symptom.** After restoring a session, the main canvas stays blank and the
-thumbnails never paint. The app is not obviously broken otherwise — the page
-count, order and toolbar are all correct, so it reads as "my document lost
-its pages".
+For a long time this file described a render deadlock in the app: after a
+session restore the main canvas stayed blank and the thumbnails never
+painted, so it read as "my document lost its pages". It was the suite's one
+permanent red check, and it shaped a lot of decisions — the pen's size
+presets were made permanent toolbar furniture to avoid a reflow "trigger",
+and the wheel-zoom checks were moved into a second browser instance to stay
+clear of a supposed render-capacity limit.
 
-**It is not the detached-ArrayBuffer trap.** The restored data is completely
-intact; only rendering is stuck. The probe printed on failure shows:
+**All of that was chasing a headless-Chrome artifact.**
 
-```
-sourceBytes: 13872      <- source PDF intact
-numPages: 3             <- pdf.js document alive
-getPage: resolved       <- pdf.js still answers
-thumbCanvases: 0        <- thumbnail painter never got started
-render: HUNG            <- renderMainCanvas() never resolves
-```
+### What it actually was
 
-`renderMainCanvas` hangs at `await task.promise` — the RenderTask never
-settles, and `paintAllThumbs` is stuck the same way. In the worst runs the
-renderer stops answering CDP evaluates at all.
-
-**Reproduce** (`repro_race.py` in the scratchpad, or by hand):
-
-1. Open a PDF with 3+ pages.
-2. Drag page 1 to the end of the rail.
-3. Click the first thumbnail in the new order.
-4. Reload.
-
-The trigger appears to be the main-canvas render racing the sequential
-thumbnail painter over the *same* pdf.js page — after that reorder, the
-selected page and the first thumbnail are the same source page. `boot()`
-calls `renderThumbnails()` and then `renderMainCanvas()` without awaiting,
-so the two run concurrently. `CLAUDE.md` already notes that concurrent
-pdf.js renders are flaky, which is why `paintAllThumbs` awaits in a loop —
-but the main canvas was never serialised against that loop.
-
-It does not reproduce every time or from every starting state (a fresh
-import with page 1 selected renders fine), which fits a race.
-
-**Second trigger, found while adding the pen.** Anything that changes the
-toolbar's height re-enters the same deadlock, because the `resize`
-listener in `main.js` fires `renderMainCanvas()` while a render may
-already be in flight. The pen's size presets were originally shown only
-while the pen was active; toggling them wrapped the toolbar to two rows
-at 1440px, and that reflow was enough to wedge the renderer — after
-which the canvas kept its old size and the annotation layer kept its
-pre-zoom coordinates, so nothing on the page was clickable any more.
-
-Mitigated by making the pen size presets permanent toolbar furniture
-(`app.css`, `.pen-dot`) so switching tools never reflows anything. That
-removes the trigger, not the underlying race: **any** real resize — a
-window drag, an orientation change — can still hit it.
-
-**It is load-dependent, and that matters.** Adding the ten wheel-zoom
-checks to the middle of `run.sh` — roughly three extra renders — was
-enough to move the wedge forward from session restore to the *reorder*
-section, costing about forty-five later checks. Backing them out moved it
-back. So this is not one specific broken interaction; the app runs close
-enough to the edge that any extra render can tip it, and once it goes the
-whole tab is degraded (a `Page.navigate` does not recover it). Those
-checks now run in their own browser instance for exactly this reason —
-see `zoom_mode_checks` in `smoke.py`.
-
-**The concurrent-render theory is wrong — tried and disproved.** The
-obvious fix was implemented and reverted: a promise chain keyed by
-`sourceId:pageIndex`, taken by both `renderMainCanvas` and
-`paintThumbCanvas`, so the two can never render the same page proxy at
-once. The probe was unchanged with it in place:
+Probing the page while it was stuck gave this:
 
 ```
-getPage: resolved   thumbCanvases: 0   render: HUNG
+sourceBytes: 13872     <- data intact
+numPages:    3         <- document alive
+getPage:     resolved  <- worker answering
+oplist:      resolved  <- worker fully healthy
+rAF:         STARVED   <- requestAnimationFrame never fires
+freshCanvas: HUNG      <- even a throwaway canvas will not paint
+render:      HUNG
 ```
 
-So it is not two renders racing over one page. Serialising them only
-makes the thumbnail loop queue up behind the main canvas, which is
-itself already stuck — `thumbCanvases: 0` is a *consequence* of the main
-render hanging, not independent evidence of a race.
+pdf.js continues a multi-chunk canvas render from
+`requestAnimationFrame`. Headless Chrome stops compositing an unattended
+page partway through a long run, rAF stops firing with it, and every render
+stalls forever — while promises keep resolving, because microtasks do not
+need a frame. That last detail is what made it look like a deadlock instead
+of a stalled renderer.
 
-What that leaves: the first `pjPage.render()` after a restore never
-settles on its own, while `getPage` on the same document still answers.
-Worth investigating next, roughly in order of cheapness —
+The same suite in a real window: **86 passed, 0 failed.** No app change was
+needed to get there.
 
-1. ~~Whether the cancel path wedges it: `cancel()` is not synchronous, so
-   the next `render()` on the same canvas may start while the old task
-   still holds it.~~ **Tried and reverted.** Awaiting the cancelled
-   task's promise (`try { await prev.promise } catch {}`) before starting
-   the next render changed nothing — same `render: HUNG`.
-2. Whether the restored `pdfjsDoc` is built on bytes another consumer
-   has since detached — `getPage` resolving from cached structure would
-   not prove the data is still there, but rasterising needs it.
-3. Whether it reproduces with the thumbnail rail disabled entirely; if
-   it does, the thumbnails are irrelevant and this note's title is
-   wrong.
+Instrumenting each section showed rAF dying between the reorder and pen
+sections, consistently. Neither
+`--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding`,
+`--disable-features=CalculateNativeWinOcclusion`, nor a permanent
+`Page.startScreencast` brought it back, so the suite now **runs headful by
+default**. `--headless` is still there and is faster; expect the
+session-restore check to fail spuriously under it.
 
-This touches the render core, so it wants `tests/run.sh` plus this suite
-run before and after.
+### Hypotheses that were tried and are wrong
+
+Recorded so nobody spends another session on them:
+
+1. **Two renders racing over the same pdf.js page.** A promise chain keyed
+   by `sourceId:pageIndex`, taken by both `renderMainCanvas` and
+   `paintThumbCanvas`, changed nothing. `thumbCanvases: 0` is a
+   *consequence* of the main render stalling, not evidence of a race.
+2. **The cancel path wedging it.** Awaiting the cancelled task's promise
+   before starting the next render changed nothing.
+3. **Leaked pdf.js workers.** The app never calls `destroy()`, so documents
+   and their workers do accumulate — 27 live workers in one measurement.
+   Real, and worth fixing for memory, but not this: 24 documents created
+   back-to-back all rendered fine.
+4. **The detached-ArrayBuffer trap.** `sourceBytes` was always intact.
+
+### What was a real bug, found on the way
+
+`renderMainCanvas` cancelled the in-flight `RenderTask` and immediately
+started the next one on the same canvas. `cancel()` is **not synchronous** —
+the task holds the canvas until its promise settles — so pdf.js throws:
+
+```
+Cannot use the same canvas during multiple render() operations.
+```
+
+That aborts the function before it reaches the sizing code, leaving the
+canvas at its old dimensions and the annotation overlay on pre-zoom
+coordinates. Reproduced deterministically by driving 40 overlapping renders
+at one canvas.
+
+Fixed by serialising everything that touches `#pageCanvas` through a queue.
+Note the earlier per-page lock could never have worked: rapid page switches
+and zooms render *different* pages to the *same* canvas, so a lock keyed by
+page provides no mutual exclusion. The constraint pdf.js enforces is one
+render per **canvas**.
+
+## Open: pdf.js documents are never destroyed
+
+`js/pages.js` and `js/persist.js` both call `pdfjsLib.getDocument(...)` and
+nothing ever calls `.destroy()`. Each document keeps a Web Worker alive —
+27 of them after a moderate session. Not the cause of anything above, and
+harmless in short use, but a long session with many files and tab switches
+will accumulate them. The fix is either a `destroy()` on documents that get
+replaced (re-import, tab close, restore) or a single shared `PDFWorker`
+passed to every `getDocument` call.

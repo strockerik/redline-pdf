@@ -13,10 +13,10 @@ python3 -m http.server 8000     # must be http — ES modules and service
                                 # workers do not run from file://
 tests/run.sh                    # unit checks under JavaScriptCore (ships
                                 # with macOS; no node, no npm)
-tests/browser/run.sh            # integration checks driving headless Chrome
-                                # over CDP; --headful to watch. Owns its own
-                                # server. See tests/browser/KNOWN-ISSUES.md
-                                # for the one expected red check.
+tests/browser/run.sh            # integration checks driving a real Chrome
+                                # window over CDP; --headless is faster but
+                                # stalls pdf.js renders (KNOWN-ISSUES.md).
+                                # Owns its own server.
 tests/analyze.py                # static checks: import cycles, dead exports,
                                 # missing DOM ids, absolute paths, service-
                                 # worker precache drift, tab field leaks.

@@ -2,8 +2,11 @@
 # Browser smoke test: boot, render, zoom, rotate, reorder, save, restore.
 #
 # Kept out of tests/run.sh on purpose — that suite needs only JavaScriptCore,
-# while this one needs Chrome and a live http server. Pass --headful to watch
-# it drive a real window.
+# while this one needs Chrome and a live http server.
+#
+# Runs in a real visible Chrome window. --headless is faster and stays out
+# of your way, but headless stops compositing partway through a long run and
+# the session-restore check then fails spuriously — see KNOWN-ISSUES.md.
 set -e
 
 here=$(cd "$(dirname "$0")" && pwd)
