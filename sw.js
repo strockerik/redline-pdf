@@ -4,7 +4,7 @@
  * code is the classic PWA failure; the version bump plus the
  * delete-everything-else pass in `activate` is what prevents it.
  */
-const CACHE = 'redline-v11';
+const CACHE = 'redline-v12';
 
 const PRECACHE = [
   './',

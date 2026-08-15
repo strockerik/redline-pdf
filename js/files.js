@@ -93,8 +93,7 @@ export async function openViaPickerInTabs() {
   if (!canUseFileSystemAccess || !('showOpenFilePicker' in window)) {
     // No picker here, so reuse the plain file input and route its result
     // through the tab path instead of the merging one.
-    pendingInputMode = 'tabs';
-    document.getElementById('fileInput').click();
+    openViaFileInput('tabs');
     return;
   }
   try {
@@ -112,7 +111,19 @@ export async function openViaPickerInTabs() {
 
 // The <input type=file> fallback is shared by both open modes, so it has
 // to be told which one asked for it.
+//
+// Every caller goes through openViaFileInput, which sets the mode as it
+// clicks. That matters because a cancelled file dialog fires no `change`
+// event: an armed flag would survive, and the *next* open would silently
+// run in the mode the abandoned one asked for. Whoever clicked last wins,
+// which is right — the change event belongs to the most recent click.
 let pendingInputMode = 'merge';
+
+function openViaFileInput(mode) {
+  pendingInputMode = mode;
+  document.getElementById('fileInput').click();
+}
+
 export function takeInputMode() {
   const mode = pendingInputMode;
   pendingInputMode = 'merge';
@@ -121,7 +132,7 @@ export function takeInputMode() {
 
 export async function openViaPicker() {
   if (!canUseFileSystemAccess || !('showOpenFilePicker' in window)) {
-    document.getElementById('fileInput').click();
+    openViaFileInput('merge');
     return;
   }
   try {

@@ -370,6 +370,25 @@ def tab_checks(ws):
         check("tab strip hides again at one document",
               ev(ws, "document.getElementById('tabBar').classList.contains('show')") is False)
 
+    # --- the shared <input type=file> fallback (iOS / Safari path) ---
+    # Both open modes drive the same hidden input, so the mode is armed just
+    # before the click. A cancelled dialog fires no change event, so an
+    # armed flag used to survive and decide the *next* open instead.
+    ev(ws, "delete window.showOpenFilePicker")
+    before = docs()
+    click(ws, "#btnOpenTabs")      # arms 'tabs', opens the input
+    time.sleep(0.4)
+    click(ws, "#btnOpen")          # user cancelled; now they want a merge
+    time.sleep(0.4)
+    d0 = ws.call("DOM.getDocument")["root"]["nodeId"]
+    f0 = ws.call("DOM.querySelector", {"nodeId": d0, "selector": "#fileInput"})["nodeId"]
+    ws.call("DOM.setFileInputFiles", {"nodeId": f0, "files": [FIXTURE, FIXTURE]})
+    time.sleep(3)
+    after = docs()
+    check("a cancelled 'Open in Tabs' does not hijack the next 'Open'",
+          after["n"] == before["n"] and after["pages"] == before["pages"] + 6,
+          f"{before['n']} tab/{before['pages']} pages -> {after['n']} tab/{after['pages']} pages")
+
 
 def zoom_mode_checks(ws):
     """Double-click latches the wheel into zooming, Bluebeam style.
