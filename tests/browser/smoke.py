@@ -324,6 +324,111 @@ window.showOpenFilePicker = async () => {
 """
 
 
+# Chrome hands launch files only to an installed app opened from the OS,
+# which no harness can arrange. This stands in for the queue: the app's
+# consumer is captured, and `__launch(name)` delivers a file to it the way
+# a double-click in Finder would.
+LAUNCH_STUB = r"""
+(() => {
+  const mk = (name, buf) => {
+    const h = { kind: 'file', name };
+    Object.defineProperty(h, 'getFile', {
+      enumerable: false,
+      value: async () => new File([buf.slice(0)], name, { type: 'application/pdf' }),
+    });
+    return h;
+  };
+  let consumer = null;
+  const fire = async (name) => {
+    const buf = await (await fetch('./tests/browser/fixture.pdf')).arrayBuffer();
+    await consumer({ files: [mk(name, buf)] });
+  };
+  Object.defineProperty(window, 'launchQueue', { configurable: true, value: {
+    setConsumer(fn) {
+      consumer = fn;
+      // A launch *from* Finder: the file is already waiting when the app
+      // boots, so it arrives before the saved session has been read back.
+      if (localStorage.getItem('redlineTestLaunch')) {
+        localStorage.removeItem('redlineTestLaunch');
+        window.__bootLaunch = fire('launched.pdf');
+      }
+    },
+  }});
+  window.__launch = fire;
+})();
+"""
+
+
+def launch_checks(ws):
+    """Double-clicking a PDF in Finder, with Redline as its handler.
+
+    The file has to open, as itself. It used to race the session restore
+    for the live document: arrive first and the restore overwrote it —
+    the file never appeared, only its thumbnail, stuck to page 1 of the
+    restored document — arrive second and it was merged into whatever the
+    session held. Either way the saved session is what the user saw.
+    """
+    print("\n=== opened from Finder ===")
+
+    def docs():
+        return ev(ws, """(async () => {
+          const s = await import('./js/state.js');
+          return {
+            n: s.state.docs.length,
+            active: s.state.docName,
+            pages: s.state.pages.length,
+            // The active document's name and pages live in `state`; its
+            // record is stale until the next capture.
+            all: s.state.docs.map(d => d.id === s.state.activeDocId
+              ? s.state.docName + ':' + s.state.pages.length
+              : d.docName + ':' + d.pages.length),
+          };
+        })()""", awaitp=True)
+
+    ev(ws, """(async () => {
+      const p = await import('./js/persist.js');
+      const s = await import('./js/state.js');
+      await p.flushSave();
+      s.markDirty(false);          // or beforeunload blocks the navigation
+      localStorage.setItem('redlineTestLaunch', '1');
+    })()""", awaitp=True)
+    before = docs()
+    check("a session is saved to come back to", before["n"] >= 1 and any(not x.endswith(":0") for x in before["all"]), str(before["all"]))
+
+    ws.call("Page.navigate", {"url": URL})
+    wait_for(ws, "!!window.__bootLaunch", timeout=30, label="relaunched with a file waiting")
+    ev(ws, "window.__bootLaunch.then(() => true)", awaitp=True)
+    wait_for(ws, "document.querySelectorAll('#thumbList canvas').length === 3", timeout=30)
+    d = docs()
+    check("the file opened from Finder is the document on screen",
+          d["active"] == "launched.pdf" and d["pages"] == 3, str(d))
+    check("in a tab of its own", d["n"] == before["n"] + 1, f"{before['n']} documents before, {d['n']} after")
+    rest = sorted(x for x in d["all"] if not x.startswith("launched.pdf:"))
+    check("and the restored session is left as it was", rest == sorted(before["all"]), f"{rest} vs {sorted(before['all'])}")
+    target = ev(ws, """(async () => {
+      const { state } = await import('./js/state.js');
+      return { name: state.fileHandle && state.fileHandle.name, combined: state.combined, dirty: state.dirty };
+    })()""", awaitp=True)
+    check("it keeps its own save target", target == {"name": "launched.pdf", "combined": False, "dirty": False}, str(target))
+    check("the title says which file this is",
+          ev(ws, "document.getElementById('docTitle').textContent") == "launched.pdf")
+    shot(ws, "10-launched")
+
+    # A second double-click, with the app already open.
+    ev(ws, "document.querySelectorAll('#thumbList canvas').forEach((c) => { c.dataset.seen = '1'; })")
+    ev(ws, "window.__launch('second.pdf').then(() => true)", awaitp=True)
+    wait_for(ws, "document.querySelectorAll('#thumbList canvas').length === 3", timeout=30)
+    time.sleep(0.5)
+    d2 = docs()
+    check("a file opened while Redline is running gets another tab",
+          d2["n"] == d["n"] + 1 and d2["active"] == "second.pdf" and d2["pages"] == 3, str(d2))
+    check("rather than being merged into the one before", "launched.pdf:3" in d2["all"], str(d2["all"]))
+    # Both documents number their pages from 1. A cache keyed by that
+    # number hands the first document's thumbnails to the second.
+    fresh = ev(ws, "[...document.querySelectorAll('#thumbList canvas')].every((c) => !c.dataset.seen)")
+    check("its thumbnails are its own, not the previous document's", fresh is True)
+
+
 def tab_checks(ws):
     """Open in Tabs, and the thing most likely to lose work quietly: two
     open documents autosaving over each other.
@@ -1262,7 +1367,7 @@ def main():
         ws3 = cdp.WS(cdp.page_target(9223)["webSocketDebuggerUrl"])
         ws3.call("Runtime.enable")
         ws3.call("Page.enable")
-        ws3.call("Page.addScriptToEvaluateOnNewDocument", {"source": TABS_STUB + RAF_PROBE})
+        ws3.call("Page.addScriptToEvaluateOnNewDocument", {"source": TABS_STUB + LAUNCH_STUB + RAF_PROBE})
         ws3.call("Page.navigate", {"url": URL})
         wait_for(ws3, "document.querySelectorAll('#colorGrp .swatch').length > 0",
                  timeout=30, label="tabs app booted")
@@ -1270,6 +1375,7 @@ def main():
         tab_checks(ws3)
         heavy_page_checks(ws3, plot=True)
         heavy_page_checks(ws3, plot=False)
+        launch_checks(ws3)
     except TimeoutError:
         failed += 1
         print("FAIL  the renderer stopped answering during the tab checks")

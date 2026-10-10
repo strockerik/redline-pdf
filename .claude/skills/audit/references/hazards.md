@@ -59,8 +59,17 @@ The richest source of bugs in this app, because the failures are silent.
   `captureActiveDoc()` first, or the visible tab autosaves whatever it held
   at the last switch.
 - **Caches keyed by ids that are not globally unique.** Page ids restart
-  per document, and the thumbnail cache is keyed by page id — a tab switch
-  must invalidate it or the new tab shows the old tab's pages.
+  per document, and the thumbnail cache was keyed by page id — so it had
+  to be flushed on every path that replaces the live document, and one
+  was missed twice: opening in a new tab, and a session restore landing
+  on top of a file opened from Finder, which left that file's thumbnail
+  on page 1 of a different document. It is keyed by the page object now.
+  Prefer identity to an id plus a flush you have to remember.
+- **Two things written to `state` during boot.** The launch handler and
+  the session restore are both asynchronous and both replace the live
+  document. Whichever finished second won: the double-clicked file was
+  either overwritten or merged into the session. Anything that can arrive
+  before boot is over must wait for it (`booted` in main.js).
 - **Flags that must ride along in persistence.** `combined` marks a
   document with no single file to save back to. Left out of the snapshot, a
   restore hands it back its overwrite target and the data-loss bug returns.

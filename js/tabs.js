@@ -61,8 +61,7 @@ function switchToDoc(id) {
   captureActiveDoc();
   loadDocIntoState(target);
 
-  // Thumbnails are cached by page id, and page ids restart per document,
-  // so a stale cache would show the previous tab's pages.
+  // Only the visible document's thumbnails are worth holding on to.
   invalidateAllThumbs();
   renderTabs();
   updateTitle();

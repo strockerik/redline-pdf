@@ -329,7 +329,7 @@ function wireUi() {
   installTabs();
   setTabsChangeHandler(() => scheduleSave());
   installDragAndDrop();
-  installLaunchHandler();
+  installLaunchHandler(booted);
   installKeyboard();
   installAutosaveTriggers();
   installServiceWorker();
@@ -358,6 +358,12 @@ function wireUi() {
 // ============================================================
 // Boot
 // ============================================================
+// Resolved once boot has finished, restored session and all. Anything
+// that arrives from outside in the meantime — a file from Finder — waits
+// on it rather than racing the restore for `state`.
+let bootDone;
+const booted = new Promise((resolve) => { bootDone = resolve; });
+
 async function boot() {
   wireUi();
   updateTitle();
@@ -399,4 +405,4 @@ async function boot() {
   renderMainCanvas();
 }
 
-boot();
+boot().finally(bootDone);

@@ -962,15 +962,25 @@ export function isTypingTarget(el) {
 // ============================================================
 // Thumbnails
 // ============================================================
-// Cache keyed by page id; invalidated when the page's rotation changes,
-// so reordering pages costs no pdf.js work at all.
-const thumbCache = new Map();
+// Cache keyed by the page *object*; invalidated when the page's rotation
+// changes, so reordering pages costs no pdf.js work at all.
+//
+// Not by page id. Ids restart at 1 in every document, so an id-keyed cache
+// hands one document's thumbnail to another's page whenever the live
+// document is replaced without a flush — and that has happened twice: on a
+// tab switch, and when a session restore landed on top of a file opened
+// from Finder, leaving that file's thumbnail on a page it did not belong
+// to. An object can only ever be itself.
+let thumbCache = new WeakMap();
 
-export function invalidateThumb(pageId) { thumbCache.delete(pageId); }
-export function invalidateAllThumbs() { thumbCache.clear(); }
+export function invalidateThumb(pageId) {
+  const page = state.pages.find((p) => p.id === pageId);
+  if (page) thumbCache.delete(page);       // a deleted page takes its entry with it
+}
+export function invalidateAllThumbs() { thumbCache = new WeakMap(); }
 
 async function paintThumbCanvas(page) {
-  const cached = thumbCache.get(page.id);
+  const cached = thumbCache.get(page);
   if (cached && cached.rotation === page.rotation) return cached.canvas;
 
   const { w, h } = visualSize(page.rotation, page.W0, page.H0);
@@ -1008,7 +1018,7 @@ async function paintThumbCanvas(page) {
       await pjPage.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
     }
   }
-  thumbCache.set(page.id, { rotation: page.rotation, canvas });
+  thumbCache.set(page, { rotation: page.rotation, canvas });
   return canvas;
 }
 

@@ -70,7 +70,14 @@ annots.js, pages.js and export.js never learned about tabs. Two
 consequences worth knowing: **capture before you read a doc record** —
 the active tab's record is stale between switches, which is why
 `snapshot()` calls `captureActiveDoc()` first — and **page ids restart
-per document**, so the thumbnail cache must be flushed on a switch.
+per document**, so nothing may be cached by page id alone. The thumbnail
+cache is keyed by the page object for exactly that reason.
+
+**Anything that arrives from outside waits for boot.** A file opened from
+Finder reaches the launch handler before the saved session has been read
+back; importing it straight away meant the restore then overwrote it. The
+handler awaits `booted` (main.js) and opens each file in its own tab —
+never into whatever document happens to be live.
 
 ## The part that breaks if you're careless
 

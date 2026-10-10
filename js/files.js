@@ -10,7 +10,7 @@ import { state, setStatus, markDirty } from './state.js';
 import { importPdfBytes, importPdfFile } from './pages.js';
 import { docForNewFile, renderTabs } from './tabs.js';
 import { buildPdfBytes } from './export.js';
-import { updateTitle } from './view.js';
+import { updateTitle, renderThumbnails, renderMainCanvas } from './view.js';
 
 export const canUseFileSystemAccess = 'showSaveFilePicker' in window;
 
@@ -42,20 +42,23 @@ async function openFromHandle(handle, { asPrimary = true } = {}) {
 }
 
 /** Wire up the Chrome file handler. When Redline is the app that opened
- *  a PDF from Finder, the handle arrives here at launch. */
-export function installLaunchHandler() {
+ *  a PDF from Finder, the handle arrives here — at launch, and again for
+ *  every later double-click while the window is open.
+ *
+ *  Each file becomes its own document, in its own tab. It used to be
+ *  imported into whatever was live, which went wrong both ways round:
+ *  once the saved session was back it was merged into that document, and
+ *  before then it was simply overwritten when the restore finished — the
+ *  file you double-clicked never appeared, only the session did. So this
+ *  waits for `ready` (boot, including the restore) before touching state.
+ */
+export function installLaunchHandler(ready) {
   if (!('launchQueue' in window)) return;
   if (typeof LaunchParams === 'undefined' || !('files' in LaunchParams.prototype)) return;
   window.launchQueue.setConsumer(async (params) => {
     if (!params || !params.files || !params.files.length) return;
-    for (const handle of params.files) {
-      try {
-        await openFromHandle(handle);
-      } catch (err) {
-        console.error(err);
-        setStatus(`Couldn't open that file: ${err.message || err}`, 'err');
-      }
-    }
+    await ready;
+    await openInTabs(params.files.map((handle) => ({ handle })));
   });
 }
 
@@ -71,6 +74,11 @@ export async function openInTabs(entries) {
     // Fill the current tab if it is still empty, so choosing "open in
     // tabs" from a blank app doesn't leave an unused tab at the front.
     docForNewFile();
+    // Show the tab as what it is — empty — while the file loads. Left
+    // alone, the previous document's pages stay on screen under the new
+    // tab until the import lands, and for good if it fails.
+    renderThumbnails();
+    renderMainCanvas();
     try {
       const ok = entry.handle
         ? await openFromHandle(entry.handle)
