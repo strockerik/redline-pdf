@@ -64,6 +64,11 @@ The richest source of bugs in this app, because the failures are silent.
 - **Flags that must ride along in persistence.** `combined` marks a
   document with no single file to save back to. Left out of the snapshot, a
   restore hands it back its overwrite target and the data-loss bug returns.
+- **Two canvases can be showing the page.** Heavy vector pages are drawn
+  by WebGL into `#plotCanvas`; `#pageCanvas` stays in the layout at full
+  size because annots.js measures against it, but is blank. Anything that
+  reads pixels, or assumes the page canvas's backing store is the page,
+  needs to ask which one is live (`shownPlotImage` in view.js).
 - **A guard that runs per item must not undo itself.** `openFromHandle`
   runs once per handle in a multi-select; without a `!state.combined`
   check, the second file re-adopts a save target the first just gave up.
@@ -88,6 +93,10 @@ discards work.
 
 - **Bump `CACHE` in `sw.js`** whenever a precached file changes, or the
   installed app serves the previous version out of cache indefinitely.
+- **Bump the build stamp with it.** `#buildStamp` in index.html shows
+  `rev N · date · what changed` in the footer, N being the CACHE number.
+  It is how a stale installed copy is told from a current one, so a stamp
+  left behind is worse than none.
 - **Keep PRECACHE complete.** `js/tabs.js` shipped missing from it: fine
   online, dead offline. `cache.addAll` is atomic, so a listed-but-missing
   file is just as bad — it fails the whole install.
@@ -125,6 +134,14 @@ discards work.
   *throwaway* canvas would not paint. **Before theorising about any render
   stall, run it headful.** The suite defaults to a real window for this
   reason.
+- **A WebGL canvas cannot be read back after the frame it was drawn in.**
+  `drawImage` or `getImageData` on it later returns blank, which reads as
+  "nothing rendered". Render again into a framebuffer and read that.
+- **Is the fixture what you think it is?** The heavy-page fixture was
+  meant to be 215,000 strokes and is — but only 3,780 distinct ones, the
+  rest drawn on top of each other. A "page is dark" threshold tuned
+  against one renderer failed against another that was drawing it
+  correctly.
 - New behaviour with no coverage is itself a finding.
 
 ## 7. Coordinate space

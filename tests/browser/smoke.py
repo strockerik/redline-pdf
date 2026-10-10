@@ -39,6 +39,51 @@ def ensure_fixture():
     print(f"built fixture: {FIXTURE}")
 
 
+HEAVY_FIXTURE = os.path.join(HERE, "heavy-fixture.pdf")
+HEAVY_HEX_FIXTURE = os.path.join(HERE, "heavy-hex-fixture.pdf")
+
+
+def ensure_heavy_fixture(path=HEAVY_FIXTURE, hexed=False):
+    """A one-page PDF whose content stream is over the app's heavy-page
+    threshold. ~200k short strokes, all in the left part of a landscape
+    page — lopsided on purpose, so a rotation drawn the wrong way round is
+    visible.
+
+    Plain, it takes the GPU path a CAD plot does. Hex-encoded it is the
+    same page in a filter the plot compiler declines, which is how the
+    suite reaches the fallback (one pdf.js render into a cached bitmap)
+    on a machine where the fast path works."""
+    if os.path.exists(path):
+        return
+    ops = ["0.3 w"]
+    for i in range(215000):
+        x, y = 12 + (i * 13) % 270, 12 + (i * 7) % 588
+        ops.append(f"{x} {y} m {x + 8} {y + 3} l S")
+    content = "\n".join(ops).encode()
+    extra = b""
+    if hexed:
+        content = content.hex().encode() + b">"
+        extra = b"/Filter/ASCIIHexDecode"
+    objs = [
+        b"<</Type/Catalog/Pages 2 0 R>>",
+        b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+        b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 792 612]/Contents 4 0 R/Resources<<>>>>",
+        b"<</Length %d%s>>\nstream\n" % (len(content), extra) + content + b"\nendstream",
+    ]
+    out, offsets = bytearray(b"%PDF-1.4\n"), []
+    for n, body in enumerate(objs, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % n + body + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1)
+    for off in offsets:
+        out += b"%010d 00000 n \n" % off
+    out += b"trailer\n<</Size %d/Root 1 0 R>>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, xref)
+    with open(path, "wb") as f:
+        f.write(out)
+    print(f"built fixture: {path}")
+
+
 def check(label, cond, detail=""):
     global passed, failed
     if cond:
@@ -413,6 +458,142 @@ def tab_checks(ws):
           f"{before['n']} tab/{before['pages']} pages -> {after['n']} tab/{after['pages']} pages")
 
 
+def heavy_page_checks(ws, plot):
+    """A page too big to hand to pdf.js on every redraw.
+
+    plot=True   the fast path: linework compiled once and drawn by the GPU
+                into #plotCanvas.
+    plot=False  the fallback: one pdf.js render into a cached bitmap, shown
+                through #pageCanvas.
+
+    Either way pdf.js must never be asked to draw the page again for a
+    zoom, a rotation or a thumbnail — that is the whole point of both.
+
+    The fixture merges into whatever document is open, as its last page.
+    """
+    print(f"\n=== heavy page ({'GPU plot' if plot else 'bitmap fallback'}) ===")
+    fixture = HEAVY_FIXTURE if plot else HEAVY_HEX_FIXTURE
+    ensure_heavy_fixture(fixture, hexed=not plot)
+    before = ev(ws, "document.querySelectorAll('#thumbList .thumb').length")
+    doc = ws.call("DOM.getDocument")["root"]["nodeId"]
+    node = ws.call("DOM.querySelector", {"nodeId": doc, "selector": "#fileInput"})["nodeId"]
+    ws.call("DOM.setFileInputFiles", {"nodeId": node, "files": [fixture]})
+    wait_for(ws, f"document.querySelectorAll('#thumbList .thumb').length === {before + 1}",
+             timeout=30, label="heavy fixture imported")
+    ev(ws, "document.querySelector('#thumbList .thumb:last-child').scrollIntoView()")
+    click(ws, "#thumbList .thumb:last-child .thumb-canvas")
+
+    # Where the ink is, as [left, right, top, bottom] halves of a canvas.
+    # Anything visibly off-white counts: a thumbnail is a sheet scaled far
+    # down, and thin linework at that size is grey, not black.
+    halves = """((c) => {
+      if (!c) return [0, 0, 0, 0];
+      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      const out = [0, 0, 0, 0];
+      for (let y = 0; y < c.height; y += 4) for (let x = 0; x < c.width; x += 4) {
+        if (d[(y * c.width + x) * 4] > 235) continue;
+        out[x < c.width / 2 ? 0 : 1]++;
+        out[y < c.height / 2 ? 2 : 3]++;
+      }
+      return out;
+    })"""
+    thumb_halves = f"{halves}(document.querySelector('#thumbList .thumb:last-child canvas'))"
+
+    def page_halves():
+        # A WebGL canvas cannot be read back after its frame, so the plot
+        # is asked to draw itself again into something that can.
+        if plot:
+            return ev(ws, f"(async () => {halves}((await import('./js/view.js')).shownPlotImage(1600)))()", awaitp=True)
+        return ev(ws, f"{halves}(document.getElementById('pageCanvas'))")
+
+    badge = "document.getElementById('pageStack').classList.contains('rendering')"
+    shown = "document.getElementById('plotCanvas').style.display"
+    # The badge clearing is the app saying the page is all there.
+    wait_for(ws, f"!{badge}", timeout=90, label="heavy page finished and the progress badge cleared")
+    check("took the intended path", (ev(ws, shown) == "block") == plot, f"#plotCanvas display: {ev(ws, shown)}")
+    l, r, t, b = page_halves()
+    check("heavy page drawn the right way up", l > 500 and r < l / 20, f"left {l}, right {r}")
+
+    wait_for(ws, f"{thumb_halves}[0] > 20", timeout=30, label="heavy page thumbnail painted from the same result")
+
+    # From here on pdf.js must not be asked to draw this page. Count the
+    # calls rather than timing them: a fast machine would re-render this
+    # fixture quickly enough to hide the regression.
+    ev(ws, """(async () => {
+      const { state } = await import('./js/state.js');
+      const page = state.pages[state.pages.length - 1];
+      const src = state.sources.find((s) => s.id === page.sourceId);
+      const pj = await src.pdfjsDoc.getPage(page.sourcePageIndex + 1);
+      const render = pj.render.bind(pj);
+      window.__heavyRenders = 0;
+      pj.render = (o) => { window.__heavyRenders++; return render(o); };
+    })()""", awaitp=True)
+    settle = "new Promise((r) => setTimeout(r, 500))"
+
+    for _ in range(12):
+        ev(ws, "document.getElementById('btnZoomIn').click()")
+    ev(ws, settle, awaitp=True)
+    big = ev(ws, """(() => {
+      const c = document.getElementById('%s'), s = document.getElementById('canvasStage');
+      const dpr = window.devicePixelRatio || 1;
+      return { px: c.width * c.height, page: parseFloat(document.getElementById('pageStack').style.width),
+               stage: (s.clientWidth + 320) * (s.clientHeight + 320) * dpr * dpr,
+               zoom: document.getElementById('zoomReadout').textContent }; })()""" % ("plotCanvas" if plot else "pageCanvas"))
+    if plot:
+        # Only ever as large as the part of the page on screen.
+        check("deep zoom draws only what is visible", 0 < big["px"] <= big["stage"] * 1.01,
+              f"{big['px'] / 1e6:.1f} MP canvas at {big['zoom']}")
+    else:
+        check("deep zoom keeps the backing store within budget", 0 < big["px"] <= 32.2e6,
+              f"{big['px'] / 1e6:.1f} MP at {big['zoom']}")
+    check("deep zoom still grows the page on screen", big["page"] > 5000, f"{big['page']}px wide")
+    l, r, t, b = page_halves()
+    check("zoomed page still has its content", l > 500 and r < l / 20, f"left {l}, right {r}")
+
+    # A page wider than the stage must still scroll to its own left edge.
+    # Centring the stage's content used to push half the overflow off the
+    # left, where no scroll position reaches.
+    ev(ws, "document.getElementById('canvasStage').scrollLeft = 0")
+    edge = ev(ws, """(() => {
+      const k = document.getElementById('pageStack').getBoundingClientRect();
+      const s = document.getElementById('canvasStage').getBoundingClientRect();
+      return k.left - s.left; })()""")
+    check("the left edge of a zoomed page can be reached", edge >= 0, f"page starts {edge:.0f}px in from the stage's left")
+
+    if plot:
+        # The plot canvas covers the visible part of the page, so it has
+        # to move when the page is scrolled under it.
+        pos = "parseFloat(document.getElementById('plotCanvas').style.left)"
+        ev(ws, "document.getElementById('canvasStage').scrollLeft = 0")
+        ev(ws, settle, awaitp=True)
+        x0 = ev(ws, pos)
+        ev(ws, "document.getElementById('canvasStage').scrollLeft = 3000")
+        ev(ws, settle, awaitp=True)
+        x1 = ev(ws, pos)
+        check("plot canvas follows the scroll", x0 == 0 and x1 > 2000, f"left {x0}px -> {x1}px")
+        ink = ev(ws, """(() => {
+          const c = document.getElementById('plotCanvas').getBoundingClientRect();
+          const s = document.getElementById('canvasStage').getBoundingClientRect();
+          return c.left <= s.left + 1 && c.right >= Math.min(s.right, document.getElementById('pageStack').getBoundingClientRect().right) - 1;
+        })()""")
+        check("and still covers the visible page", ink is True)
+
+    ev(ws, "document.getElementById('btnFitWidth').click()")
+    ev(ws, "document.getElementById('btnRotateCW').click()")
+    ev(ws, settle, awaitp=True)
+    dims = ev(ws, "(() => { const k = document.getElementById('pageStack'); return [k.offsetWidth, k.offsetHeight]; })()")
+    l, r, t, b = page_halves()
+    check("rotated heavy page is portrait", dims[1] > dims[0], f"{dims[0]}x{dims[1]}")
+    # Clockwise: what was on the left is now at the top.
+    check("rotation turns the page clockwise", t > 500 and b < t / 20, f"top {t}, bottom {b}")
+    tl, tr, tt, tb = ev(ws, thumb_halves)
+    check("thumbnail follows the rotation", tt > 20 and tb < tt / 20, f"top {tt}, bottom {tb}")
+
+    n = ev(ws, "window.__heavyRenders")
+    check("zoom and rotation never sent the page back through pdf.js", n == 0, f"{n} pdf.js render(s)")
+    shot(ws, "heavy-page-plot" if plot else "heavy-page-fallback")
+
+
 def zoom_mode_checks(ws):
     """Double-click latches the wheel into zooming, Bluebeam style.
 
@@ -507,6 +688,19 @@ def main():
         wait_for(ws, "navigator.serviceWorker.controller || navigator.serviceWorker.getRegistration()", timeout=8)
         reg = ev(ws, "(async()=>!!(await navigator.serviceWorker.getRegistration()))()", awaitp=True)
         check("service worker registered", reg is True)
+        # The stamp is how a stale installed copy gets noticed, so it has
+        # to be on screen and has to name the cache the worker really uses.
+        stamp = ev(ws, """(async () => {
+          const el = document.getElementById('buildStamp');
+          const sw = await (await fetch('./sw.js')).text();
+          return { text: el.textContent.trim(), shown: el.getBoundingClientRect().width > 0,
+                   empty: document.getElementById('emptyStamp').textContent.trim(),
+                   cache: (sw.match(/const CACHE = 'redline-v(\\d+)'/) || [])[1] };
+        })()""", awaitp=True)
+        check("build stamp on screen", stamp["shown"] and stamp["text"].startswith("rev "), stamp["text"])
+        check("build stamp names the service worker's cache", stamp["text"].startswith(f"rev {stamp['cache']} "),
+              f"{stamp['text']!r} vs redline-v{stamp['cache']}")
+        check("build stamp repeated on the empty sheet", stamp["empty"] == stamp["text"], stamp["empty"])
         shot(ws, "01-boot")
 
         # ---------------------------------------------- 2. save guard
@@ -1074,6 +1268,8 @@ def main():
                  timeout=30, label="tabs app booted")
         time.sleep(1)
         tab_checks(ws3)
+        heavy_page_checks(ws3, plot=True)
+        heavy_page_checks(ws3, plot=False)
     except TimeoutError:
         failed += 1
         print("FAIL  the renderer stopped answering during the tab checks")

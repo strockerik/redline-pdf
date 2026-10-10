@@ -6,6 +6,10 @@ import {
   THUMB_WIDTH, PT_TO_PX, ZOOM_STEPS, MIN_ZOOM, MAX_ZOOM,
 } from './state.js';
 import { renderAnnotationLayer } from './annots.js';
+import {
+  plotAvailable, plotRecord, startPlot, drawPlot, plotBitmap, plotBusy,
+  pageMatrix, setShownPlot, sweepPlots, onPlotEvent,
+} from './plot.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -90,6 +94,431 @@ export function setWheelZoom(on) {
 }
 
 // ============================================================
+// Heavy pages
+//
+// A sheet plotted from CAD can be tens of millions of drawing operators.
+// pdf.js copes, but only just: one page of the plot this was written for
+// takes ~11 s and ~2 GB of heap to turn into an operator list, then
+// another ~25 s to replay onto a canvas — at *any* size, because the cost
+// is the operator count, not the pixel count. The ordinary path below
+// re-renders on every zoom and renders each page again for its thumbnail,
+// and pdf.js keeps every operator list until told otherwise, so opening
+// such a file ran the tab out of memory before a page appeared.
+//
+// A heavy page therefore never goes through the ordinary path. It takes
+// one of two others:
+//
+//   plot    The page's linework is compiled once, in a worker, into GPU
+//           geometry and drawn with WebGL into #plotCanvas (plot.js). A
+//           redraw is milliseconds, so zoom and pan stay true vectors.
+//           pdf.js only draws what is left: text and images.
+//
+//   master  Where that is not available — no WebGL2, or a page built from
+//           things the compiler does not take — the page is rendered
+//           exactly once by pdf.js, unrotated, into an offscreen "master"
+//           canvas, and everything is drawn from that bitmap. Slow to
+//           arrive and soft past its resolution, but it always works.
+//
+// Either way the thumbnail comes from the same result, and pdf.js's
+// operator list is never held. Ordinary pages come through neither and
+// stay exactly as sharp as before.
+// ============================================================
+const HEAVY_CONTENT_BYTES = 4e6;   // compressed content; ordinary pages are well under 1 MB
+const MAX_CANVAS_SIDE = 16384;     // Chrome refuses a canvas larger than this on either side
+const MAX_CANVAS_AREA = MAX_CANVAS_SIDE * MAX_CANVAS_SIDE;
+const PROGRESS_BLIT_MS = 400;
+
+// iOS caps a canvas near 16.7 MP and has far less memory to give.
+const smallDevice = () => !!window.matchMedia?.('(pointer: coarse)').matches;
+const masterPixels = () => (smallDevice() ? 16e6 : 32e6);
+const maxMasters = () => (smallDevice() ? 1 : 4);
+
+/** Device px per pt for a heavy page's master. Exported for testing. */
+export function masterScale(w, h, pixels = masterPixels()) {
+  return Math.min(
+    Math.sqrt(pixels / (w * h)),
+    MAX_CANVAS_SIDE / Math.max(w, h),
+    MAX_ZOOM * PT_TO_PX * 2,          // never larger than the deepest zoom could show
+  );
+}
+
+/** The largest backing scale a canvas of w × h pt can actually have.
+ *  Exported for testing. */
+export function clampBackingScale(scale, w, h) {
+  const area = smallDevice() ? 16e6 : MAX_CANVAS_AREA;
+  return Math.min(scale, Math.sqrt(area / (w * h)), MAX_CANVAS_SIDE / Math.max(w, h));
+}
+
+// Keyed by the source object and page index rather than by page id: page
+// ids restart per document, and a master is far too expensive to throw
+// away on a tab switch the way the thumbnail cache is.
+const pageRecords = new WeakMap();     // source -> Map(pageIndex -> record)
+
+function recordFor(src, index) {
+  let byIndex = pageRecords.get(src);
+  if (!byIndex) pageRecords.set(src, byIndex = new Map());
+  let rec = byIndex.get(index);
+  if (!rec) {
+    rec = {
+      src, index,
+      heavy: null,          // decided once, on first use
+      state: 'none',        // 'none' | 'rendering' | 'done' — the master's
+      canvas: null,         // the master, unrotated
+      thumb: null,          // small unrotated bitmap; outlives the master
+      thumbFailed: false,
+      plot: null,           // plot.js record, once the fast path has been tried
+      plotFailed: false,    // ... and whether it had to give up
+    };
+    byIndex.set(index, rec);
+  }
+  return rec;
+}
+
+/** Compressed size of everything the page draws: its content streams plus
+ *  any form XObjects it paints, which is where some producers put the
+ *  whole sheet. Known as soon as pdf-lib has parsed the file, long before
+ *  pdf.js could say how many operators that amounts to. */
+function contentBytes(src, index) {
+  try {
+    const node = src.pdfLibDoc.getPage(index).node;
+    const sizeOf = (s) => (typeof s?.getContentsSize === 'function' ? s.getContentsSize() : 0);
+    let total = 0;
+
+    const contents = node.Contents();
+    if (contents && typeof contents.size === 'function') {
+      for (let i = 0; i < contents.size(); i++) total += sizeOf(contents.lookup(i));
+    } else {
+      total += sizeOf(contents);
+    }
+
+    const { PDFName } = PDFLib;
+    const xobjects = node.Resources()?.lookup(PDFName.of('XObject'));
+    for (const key of xobjects?.keys?.() || []) {
+      const x = xobjects.lookup(key);
+      if (x?.dict?.get(PDFName.of('Subtype')) === PDFName.of('Form')) total += sizeOf(x);
+    }
+    return total;
+  } catch {
+    return 0;       // an odd file is simply treated as an ordinary one
+  }
+}
+
+/** The record for `page` if it is a heavy one, else null. */
+function heavyRecordFor(page) {
+  if (!page || page.kind !== 'imported') return null;
+  const src = state.sources.find((s) => s.id === page.sourceId);
+  if (!src) return null;
+  const rec = recordFor(src, page.sourcePageIndex);
+  if (rec.heavy === null) {
+    rec.heavy = contentBytes(src, page.sourcePageIndex) > HEAVY_CONTENT_BYTES;
+  }
+  return rec.heavy ? rec : null;
+}
+
+/** Draw an unrotated bitmap onto `dest` at page rotation R, filling it.
+ *  `/Rotate` is clockwise, so at 90° the bitmap's top-left corner lands
+ *  top-right. A missing source just leaves white paper. */
+function drawRotated(dest, source, rotation) {
+  const ctx = dest.getContext('2d');
+  const w = dest.width, h = dest.height;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, w, h);
+  if (!source || !source.width) return;
+
+  const R = normRot(rotation);
+  if (R === 90) ctx.setTransform(0, 1, -1, 0, w, 0);
+  else if (R === 180) ctx.setTransform(-1, 0, 0, -1, w, h);
+  else if (R === 270) ctx.setTransform(0, -1, 1, 0, 0, h);
+  const quarter = R === 90 || R === 270;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(source, 0, 0, quarter ? h : w, quarter ? w : h);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+// The heavy page #pageCanvas is currently showing, so a master that is
+// still rendering can keep repainting it. Null for every other page.
+let shown = null;            // { rec, rotation }
+
+function blitShown(rec) {
+  if (!shown || shown.rec !== rec) return;
+  drawRotated($('pageCanvas'), rec.canvas, shown.rotation);
+}
+
+function setRenderingBadge(on) {
+  $('pageStack').classList.toggle('rendering', on);
+}
+
+// Masters are large, so only the most recently viewed few are kept.
+const masterOrder = [];      // records holding a master, least recent first
+
+function touchMaster(rec) {
+  const at = masterOrder.indexOf(rec);
+  if (at >= 0) masterOrder.splice(at, 1);
+  masterOrder.push(rec);
+  for (let i = 0; masterOrder.length > maxMasters() && i < masterOrder.length;) {
+    const old = masterOrder[i];
+    if (old === rec || old.state !== 'done') { i++; continue; }
+    masterOrder.splice(i, 1);
+    old.canvas.width = old.canvas.height = 0;   // give the memory back now, not at GC
+    old.canvas = null;
+    old.state = 'none';
+  }
+}
+
+// ---------- the plot path ----------
+const PLOT_MARGIN = 160;     // CSS px drawn beyond the visible stage, so a scroll has somewhere to go
+const PLOT_PROGRESS_MS = 220;
+
+// The plot on screen, and how its page is laid out: { rec, heavy,
+// rotation, scale, cssW, cssH }. Null whenever #plotCanvas is hidden.
+let shownPlot = null;
+let plotEventsOn = false;
+let plotRaf = 0, plotTimer = 0, plotDrawnAt = 0;
+
+/** The plot record for a heavy page, or null if it has to use a master. */
+function plotFor(heavy) {
+  if (heavy.plotFailed || !plotAvailable()) return null;
+  if (!plotEventsOn) { plotEventsOn = true; onPlotEvent(onPlotChange); }
+  if (!heavy.plot) {
+    heavy.plot = plotRecord(heavy.src, heavy.index);
+    heavy.plot.owner = heavy;
+  }
+  return heavy.plot;
+}
+
+function onPlotChange(rec, kind) {
+  if (kind === 'reset') {              // GPU context lost: every plot is gone
+    if (shownPlot) renderMainCanvas();
+    return;
+  }
+  const heavy = rec.owner;
+  if (kind === 'failed') {
+    // Not an error the user needs to hear about: the master path takes it.
+    heavy.plotFailed = true;
+    heavy.plot = null;
+    if (shownPlot && shownPlot.rec === rec) renderMainCanvas();
+    pumpHeavyThumbs();
+    return;
+  }
+  if (kind === 'ready') {
+    const b = rec.box;
+    heavy.thumb = plotBitmap(rec, thumbBitmapScale(b[2] - b[0], b[3] - b[1]), true);
+    paintAllThumbs(++paintGeneration);
+  }
+  if (!shownPlot || shownPlot.rec !== rec) return;
+  if (kind === 'ready') setRenderingBadge(false);
+  if (kind !== 'progress') { schedulePlotDraw(); return; }
+  // Geometry arrives in dozens of batches; a full-sheet redraw for each
+  // would spend the time saved.
+  const wait = PLOT_PROGRESS_MS - (performance.now() - plotDrawnAt);
+  if (wait <= 0) schedulePlotDraw();
+  else if (!plotTimer) plotTimer = setTimeout(() => { plotTimer = 0; schedulePlotDraw(); }, wait);
+}
+
+function schedulePlotDraw() {
+  if (plotRaf) return;
+  plotRaf = requestAnimationFrame(() => { plotRaf = 0; drawShownPlot(); });
+}
+
+/** Put #plotCanvas over the part of the page that is on screen and draw
+ *  into it. The canvas is only ever as large as the stage, however far the
+ *  page is zoomed — that is what lets 800% stay sharp without a backing
+ *  store the browser would refuse. */
+function drawShownPlot() {
+  const sp = shownPlot;
+  if (!sp) return;
+  const stage = $('canvasStage');
+  const canvas = $('plotCanvas');
+  const dpr = window.devicePixelRatio || 1;
+
+  const cw = Math.min(sp.cssW, stage.clientWidth + PLOT_MARGIN * 2);
+  const ch = Math.min(sp.cssH, stage.clientHeight + PLOT_MARGIN * 2);
+  const sr = stage.getBoundingClientRect();
+  const pr = $('pageStack').getBoundingClientRect();
+  // Snapped to device pixels, so nothing is resampled on its way to the screen.
+  const snap = (v) => Math.round(v * dpr) / dpr;
+  const left = snap(Math.min(Math.max(sr.left - pr.left - PLOT_MARGIN, 0), sp.cssW - cw));
+  const top = snap(Math.min(Math.max(sr.top - pr.top - PLOT_MARGIN, 0), sp.cssH - ch));
+
+  const w = Math.max(1, Math.round(cw * dpr)), h = Math.max(1, Math.round(ch * dpr));
+  if (canvas.width !== w) canvas.width = w;
+  if (canvas.height !== h) canvas.height = h;
+  canvas.style.width = cw + 'px';
+  canvas.style.height = ch + 'px';
+  canvas.style.left = left + 'px';
+  canvas.style.top = top + 'px';
+
+  const m = pageMatrix(sp.rec.box, sp.rotation, sp.scale);
+  m[4] -= left; m[5] -= top;
+  for (let k = 0; k < 6; k++) m[k] *= dpr;
+  plotDrawnAt = performance.now();
+  drawPlot(sp.rec, { m, w, h, pxPerPt: sp.scale * dpr });
+}
+
+function hidePlot() {
+  if (!shownPlot) return;
+  shownPlot = null;
+  setShownPlot(null);
+  $('plotCanvas').style.display = 'none';
+}
+
+/** What the plot on screen looks like, as the whole page `width` px wide
+ *  at its current rotation. For the tests: a WebGL canvas cannot be read
+ *  back after the frame it was drawn in. */
+export function shownPlotImage(width) {
+  const sp = shownPlot;
+  if (!sp || !sp.rec.page) return null;
+  const b = sp.rec.box;
+  const bmp = plotBitmap(sp.rec, width / (b[2] - b[0]));
+  if (!bmp) return null;
+  const quarter = normRot(sp.rotation) === 90 || normRot(sp.rotation) === 270;
+  const out = document.createElement('canvas');
+  out.width = quarter ? bmp.height : bmp.width;
+  out.height = quarter ? bmp.width : bmp.height;
+  drawRotated(out, bmp, sp.rotation);
+  return out;
+}
+
+// ---------- the master path ----------
+// One heavy render at a time, and a master always outranks a thumbnail.
+let heavyJob = null;         // { rec, kind: 'master' | 'thumb', task, cancelled }
+let heavyQueue = Promise.resolve();
+
+function cancelHeavyJob() {
+  const job = heavyJob;
+  if (!job) return;
+  heavyJob = null;
+  job.cancelled = true;
+  if (job.kind === 'master') {
+    const at = masterOrder.indexOf(job.rec);
+    if (at >= 0) masterOrder.splice(at, 1);
+    job.rec.canvas = null;
+    job.rec.state = 'none';
+  }
+  try { job.task?.cancel(); } catch { /* already settled */ }
+}
+
+function startHeavyJob(rec, kind) {
+  const job = { rec, kind, task: null, cancelled: false };
+  heavyJob = job;
+  // Chained, so a cancelled render has let go of pdf.js before the next
+  // one starts.
+  heavyQueue = heavyQueue.then(() => runHeavyJob(job));
+}
+
+async function runHeavyJob(job) {
+  const { rec, kind } = job;
+  let pjPage = null;
+  let canvas = null;
+  let ticker = null;
+  try {
+    if (job.cancelled) return;
+    pjPage = await rec.src.pdfjsDoc.getPage(rec.index + 1);
+    if (job.cancelled) return;
+
+    // rotation: 0 is absolute — it overrides the page's own /Rotate, which
+    // is what lets one bitmap serve every rotation.
+    const base = pjPage.getViewport({ scale: 1, rotation: 0 });
+    const scale = kind === 'master'
+      ? masterScale(base.width, base.height)
+      : thumbBitmapScale(base.width, base.height);
+    const viewport = pjPage.getViewport({ scale, rotation: 0 });
+    canvas = document.createElement('canvas');
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+
+    if (kind === 'master') {
+      rec.canvas = canvas;
+      // The page fills in as pdf.js works through it, which is the only
+      // progress report a render this long can give.
+      ticker = setInterval(() => blitShown(rec), PROGRESS_BLIT_MS);
+    }
+    job.task = pjPage.render({ canvasContext: canvas.getContext('2d'), viewport });
+    await job.task.promise;
+    if (job.cancelled) return;
+
+    if (kind === 'master') {
+      rec.state = 'done';
+      const t = thumbBitmapScale(base.width, base.height);
+      rec.thumb = document.createElement('canvas');
+      rec.thumb.width = Math.round(base.width * t);
+      rec.thumb.height = Math.round(base.height * t);
+      drawRotated(rec.thumb, canvas, 0);
+      if (shown && shown.rec === rec) {
+        blitShown(rec);
+        setRenderingBadge(false);
+      }
+    } else {
+      rec.thumb = canvas;
+    }
+    paintAllThumbs(++paintGeneration);
+  } catch (err) {
+    if (!job.cancelled && err?.name !== 'RenderingCancelledException') {
+      console.error('large page render failed', err);
+      if (kind === 'thumb') rec.thumbFailed = true;
+      else setStatus(`Couldn't render that page: ${err.message || err}`, 'err');
+    }
+  } finally {
+    clearInterval(ticker);
+    // The whole point: without this pdf.js holds the page's operator list
+    // — gigabytes of it — for as long as the document is open.
+    try { pjPage?.cleanup(); } catch { /* nothing to release */ }
+
+    if (kind === 'master' && rec.state !== 'done' && canvas) {
+      if (rec.canvas === canvas) {
+        rec.canvas = null;
+        rec.state = 'none';
+        const at = masterOrder.indexOf(rec);
+        if (at >= 0) masterOrder.splice(at, 1);
+        if (shown && shown.rec === rec) setRenderingBadge(false);
+      }
+      canvas.width = canvas.height = 0;
+    }
+    if (heavyJob === job) heavyJob = null;
+    pumpHeavyThumbs();
+  }
+}
+
+/** Make sure `rec` has a master, or is on its way to one. */
+function ensureMaster(rec) {
+  touchMaster(rec);
+  if (rec.state !== 'none') return;
+  // Whatever is running is either a thumbnail, or the master of a page the
+  // user has since left for this one.
+  cancelHeavyJob();
+  rec.state = 'rendering';
+  startHeavyJob(rec, 'master');
+}
+
+/** Bitmap scale for a heavy page's thumbnail: enough for the rail at 2x
+ *  whichever way round the page ends up. */
+function thumbBitmapScale(w, h) {
+  return (THUMB_WIDTH * 2) / Math.min(w, h);
+}
+
+/** Heavy pages nobody has looked at yet still deserve a thumbnail. Render
+ *  them one at a time, small, whenever nothing more urgent is running. */
+function pumpHeavyThumbs() {
+  for (const page of state.pages) {
+    const rec = heavyRecordFor(page);
+    if (!rec || rec.thumb || rec.thumbFailed) continue;
+    const plot = plotFor(rec);
+    if (plot) {
+      // Compiling is quick, but each sheet is a few hundred MB of
+      // geometry on its way through: one at a time.
+      if (plotBusy()) return;
+      if (plot.state === 'none') { startPlot(plot); return; }
+      continue;
+    }
+    if (heavyJob) return;
+    if (rec.state !== 'none') continue;
+    startHeavyJob(rec, 'thumb');
+    return;
+  }
+}
+
+// ============================================================
 // Main canvas
 // ============================================================
 let renderToken = 0;
@@ -120,6 +549,8 @@ export function renderMainCanvas(opts = {}) {
   updateToolbarState();
 
   if (!page) {
+    shown = null;
+    hidePlot();
     emptyState.style.display = 'block';
     pageStack.style.display = 'none';
     return Promise.resolve();
@@ -164,18 +595,55 @@ async function paintPage(page, token, opts) {
 
   const cssW = Math.round(Wv * scale);
   const cssH = Math.round(Hv * scale);
+  // Past the browser's canvas limits the backing store stops growing and
+  // the CSS size alone carries the zoom. A large sheet at 800% would
+  // otherwise ask for a canvas Chrome silently declines to draw into.
+  const backing = clampBackingScale(scale * dpr, Wv, Hv);
+
+  const heavy = heavyRecordFor(page);
+  let plot = heavy ? plotFor(heavy) : null;
+  if (plot) {
+    // A page the fast path cannot take says so at once; the master path
+    // then has it within this same paint.
+    startPlot(plot);
+    if (heavy.plotFailed) plot = null;
+  }
+  shown = heavy && !plot ? { rec: heavy, rotation: page.rotation } : null;
+  setRenderingBadge(false);
+  if (!plot) hidePlot();
 
   if (page.kind === 'blank') {
-    canvas.width = Math.round(cssW * dpr);
-    canvas.height = Math.round(cssH * dpr);
+    canvas.width = Math.round(Wv * backing);
+    canvas.height = Math.round(Hv * backing);
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+  } else if (plot) {
+    // Drawn by the GPU into #plotCanvas, below. #pageCanvas stays in the
+    // layout at full size — the annotation code measures against it — but
+    // has nothing to show, so it needs no backing store to speak of.
+    canvas.width = canvas.height = 2;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, 2, 2);
+    shownPlot = { rec: plot, heavy, rotation: page.rotation, scale, cssW, cssH };
+    setShownPlot(plot);
+    $('plotCanvas').style.display = 'block';
+    setRenderingBadge(plot.state !== 'ready');
+  } else if (heavy) {
+    // No pdf.js here: the page is drawn from its master, which may still
+    // be filling in. Everything below — layout, the annotation layer —
+    // carries on regardless, so the page can be marked up while it does.
+    ensureMaster(heavy);
+    const s = Math.min(backing, masterScale(page.W0, page.H0));
+    canvas.width = Math.round(Wv * s);
+    canvas.height = Math.round(Hv * s);
+    drawRotated(canvas, heavy.canvas, page.rotation);
+    setRenderingBadge(heavy.state !== 'done');
   } else {
     const src = state.sources.find((s) => s.id === page.sourceId);
     const pjPage = await src.pdfjsDoc.getPage(page.sourcePageIndex + 1);
     if (token !== renderToken) return;
     // rotation here is absolute — it overrides the page's own /Rotate
-    const viewport = pjPage.getViewport({ scale: scale * dpr, rotation: normRot(page.rotation) });
+    const viewport = pjPage.getViewport({ scale: backing, rotation: normRot(page.rotation) });
     canvas.width = Math.round(viewport.width);
     canvas.height = Math.round(viewport.height);
     const task = pjPage.render({ canvasContext: ctx, viewport });
@@ -214,6 +682,10 @@ async function paintPage(page, token, opts) {
     stage.scrollLeft = relX * cssW - anchorX;
     stage.scrollTop = relY * cssH - anchorY;
   }
+
+  // Last, once the page has its final size and scroll position: the plot
+  // canvas is placed by where the page actually sits in the stage.
+  if (shownPlot) drawShownPlot();
 }
 
 // ============================================================
@@ -239,6 +711,9 @@ export function installStageGestures(onPageStep) {
   // otherwise indistinguishable from a real Ctrl+wheel — so track whether
   // Ctrl is physically down. Without this, pinch-to-zoom would silently
   // turn into a scroll in Fit W, which is the default mode.
+  // A plot is drawn only where it is visible, so it follows the scroll.
+  stage.addEventListener('scroll', () => { if (shownPlot) schedulePlotDraw(); }, { passive: true });
+
   let ctrlHeld = false;
   const syncCtrl = (e) => { ctrlHeld = e.ctrlKey; };
   window.addEventListener('keydown', syncCtrl);
@@ -516,11 +991,22 @@ async function paintThumbCanvas(page) {
   } else {
     const src = state.sources.find((s) => s.id === page.sourceId);
     if (!src) return canvas;
-    const pjPage = await src.pdfjsDoc.getPage(page.sourcePageIndex + 1);
-    const viewport = pjPage.getViewport({ scale: scale * dpr, rotation: normRot(page.rotation) });
-    canvas.width = Math.round(viewport.width);
-    canvas.height = Math.round(viewport.height);
-    await pjPage.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+    const heavy = heavyRecordFor(page);
+    if (heavy) {
+      // Never through pdf.js from here — see "Heavy pages" above.
+      canvas.width = Math.round(w * scale * dpr);
+      canvas.height = Math.round(h * scale * dpr);
+      drawRotated(canvas, heavy.thumb, page.rotation);
+      // Not cached while it is still a blank: the rail is repainted when
+      // the real bitmap arrives, and must not find the placeholder.
+      if (!heavy.thumb) return canvas;
+    } else {
+      const pjPage = await src.pdfjsDoc.getPage(page.sourcePageIndex + 1);
+      const viewport = pjPage.getViewport({ scale: scale * dpr, rotation: normRot(page.rotation) });
+      canvas.width = Math.round(viewport.width);
+      canvas.height = Math.round(viewport.height);
+      await pjPage.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+    }
   }
   thumbCache.set(page.id, { rotation: page.rotation, canvas });
   return canvas;
@@ -543,6 +1029,7 @@ async function paintAllThumbs(generation) {
       console.error('thumbnail render failed', err);
     }
   }
+  pumpHeavyThumbs();
 }
 
 export function updateThumbBadge(page) {
@@ -602,6 +1089,11 @@ export function renderThumbnails() {
 
   list.replaceChildren(frag);
   paintAllThumbs(++paintGeneration);
+
+  // Every change to what is open comes through here, which makes it the
+  // place to give back the GPU memory of documents that have closed.
+  sweepPlots((src) => state.sources.includes(src)
+    || state.docs.some((d) => d.id !== state.activeDocId && d.sources.includes(src)));
 }
 
 export function updateThumbSelection() {

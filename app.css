@@ -303,7 +303,11 @@ select, input[type=text]{
     var(--paper);
   display:flex;
   align-items:flex-start;
-  justify-content:center;
+  /* No justify-content:center. The children centre themselves with auto
+     margins, which give way when a zoomed page is wider than the stage.
+     Centring the *container's* way overflows both sides equally, and the
+     left half of that can never be scrolled to — a third of a large sheet
+     at 300% was simply out of reach. */
   padding:36px;
   position:relative;
   overscroll-behavior:contain;
@@ -324,7 +328,7 @@ select, input[type=text]{
 #canvasStage.pannable:active, #canvasStage.pannable:active *{ cursor:grabbing; }
 
 #emptyState{
-  color:var(--muted); text-align:center; margin-top:70px; max-width:430px;
+  color:var(--muted); text-align:center; margin:70px auto 0; max-width:430px;
 }
 #emptyState h2{
   font-family:var(--mono); color:#3d5468; font-size:15px; letter-spacing:0.5px;
@@ -339,6 +343,23 @@ select, input[type=text]{
   margin:auto;
 }
 #pageCanvas{ display:block; }
+/* Large vector sheets are drawn here by the GPU, over just the part of
+   the page that is on screen (view.js, "Heavy pages"). It sits above
+   #pageCanvas and below the annotations, and never takes the pointer. */
+#plotCanvas{ position:absolute; top:0; left:0; display:none; pointer-events:none; }
+/* A CAD sheet can take half a minute to draw the first time. The page
+   fills in as it goes; this says that is expected. Sticky, so it stays in
+   view however far the page is scrolled or zoomed. */
+#pageStack.rendering::before{
+  content:'Rendering large page…';
+  position:sticky; top:8px; left:8px; z-index:5;
+  display:block; width:max-content; height:22px; margin-bottom:-22px;
+  padding:0 9px; border-radius:3px;
+  font-family:var(--mono); font-size:11px; letter-spacing:0.4px;
+  line-height:22px; white-space:nowrap;
+  color:var(--white); background:var(--accent);
+  pointer-events:none;
+}
 /* The layer stays hit-testable in every mode so clicking bare page
    deselects. Stage gestures (pinch, space-pan) still work because they
    listen on #canvasStage and these events bubble to it. */
@@ -441,7 +462,14 @@ select, input[type=text]{
   padding:6px calc(14px + var(--safe-r)) calc(6px + var(--safe-b)) calc(14px + var(--safe-l));
   background:var(--navy); border-top:1px solid var(--navy-3);
   flex-shrink:0;
+  display:flex; justify-content:space-between; gap:18px;
 }
+/* The build stamp gives way to the note beside it, never the reverse. */
+#footerNote span:first-child{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#buildStamp{ flex-shrink:0; white-space:nowrap; color:var(--muted); }
+/* The footer is hidden on narrow screens, so the stamp is repeated on the
+   empty sheet — the one place a phone is sure to show it. */
+#emptyState #emptyStamp{ font-family:var(--mono); font-size:10.5px; margin-top:22px; opacity:0.75; }
 
 ::-webkit-scrollbar{ width:11px; height:11px; }
 ::-webkit-scrollbar-track{ background:var(--navy); }

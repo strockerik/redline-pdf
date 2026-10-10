@@ -45,9 +45,17 @@ js/pages.js     import, blank pages, delete, rotate, reorder
 js/view.js      page canvas, zoom, thumbnails, reorder gesture
 js/annots.js    text box + callout tools, pointer interactions
 js/export.js    pdf-lib output
+js/plot.js      heavy vector pages: worker jobs, residual PDF, draw calls
+js/plotcompile.js   content stream -> GPU instances + residual stream; pure,
+                    no DOM (runs in the worker and under JavaScriptCore)
+js/plotworker.js    module worker: inflate + compile
+js/plotgl.js    WebGL2 renderer for the above
 js/tabs.js      document tabs: the open-document list and switching
 js/main.js      wiring and boot
 ```
+
+`view.js` is the only module that imports `plot.js`, and nothing in the
+plot files knows about zoom modes, tabs or annotations.
 
 `view.js` and `annots.js` import each other. That cycle is fine because
 nothing runs at module-evaluation time — but don't add top-level side
@@ -89,8 +97,12 @@ error that only shows up on 90°/270° pages and is miserable to eyeball.
 
 - **pdf.js detaches the ArrayBuffer** it's handed. Every consumer needs
   its own `bytes.slice(0)` — including session restore.
-- **Bump `CACHE` in `sw.js` on every deploy.** Otherwise the installed
-  app keeps serving the previous version from cache.
+- **Bump `CACHE` in `sw.js` on every deploy, and the build stamp with
+  it.** Otherwise the installed app keeps serving the previous version
+  from cache. The stamp is the `#buildStamp` line in index.html — `rev N ·
+  date · what changed`, where N is the CACHE number — and is what the user
+  compares against the repo to see whether a running copy is current.
+  `tests/analyze.py` fails if the two numbers disagree.
 - **All paths must stay relative (`./`).** Pages serves from
   `/redline-pdf/`, so an absolute `/js/...` works locally and 404s in
   production.
@@ -98,7 +110,40 @@ error that only shows up on 90°/270° pages and is miserable to eyeball.
   flaky; `paintAllThumbs` awaits in a loop on purpose.
 - **`renderMainCanvas` cancels the previous RenderTask** and guards with
   a token. pdf.js rejects two renders against one canvas.
-- Canvas backing store is at `scale * devicePixelRatio`; layout stays in
+- **Heavy pages never go through the ordinary render path.** A CAD plot
+  can be ten million strokes: ~2 GB of operator list and half a minute per
+  pdf.js render, whatever the canvas size. Native engines are no cure —
+  Apple's takes 5 s a redraw on the same sheet, MuPDF in WASM 10 s. A page
+  whose content passes `HEAVY_CONTENT_BYTES` takes one of two paths
+  (view.js, "Heavy pages"):
+  - **plot** — `plotcompile.js` reads the content stream once, in a
+    worker, and turns plain strokes and fills into GPU instances;
+    `plotgl.js` draws them into `#plotCanvas`, which only ever covers the
+    visible part of the page. Text, images and anything else go back out
+    as a small *residual* content stream that pdf.js draws into textures.
+    Opening is ~2 s and a redraw is milliseconds.
+  - **master** — the fallback (no WebGL2, an unsupported filter, the bulk
+    inside a form XObject): one pdf.js render, unrotated, into a capped
+    offscreen canvas, blitted from thereafter, and `pjPage.cleanup()` to
+    release the operator list.
+  Don't route such a page back through `pjPage.render` for a thumbnail or
+  a re-zoom — that is the out-of-memory crash both paths exist to prevent.
+  Records are keyed by source object, not page id, so they survive tab
+  switches.
+- **The plot path is a viewer's approximation; export never touches it.**
+  Text is drawn above all linework, joins are round, CMYK is converted
+  naively, image layers are not re-rendered as you zoom. If a sheet looks
+  wrong on screen, compare against the bitmap fallback (set
+  `plotFailed` on its record) before suspecting the file.
+- **`#pageCanvas` stays in the layout at full page size even when the
+  plot canvas is doing the drawing.** annots.js measures against it. On a
+  plot page it has a 2x2 backing store and nothing to show.
+- **The stage does not use `justify-content:center`.** Page and empty
+  state centre themselves with auto margins. Centring from the container
+  overflows a zoomed page to *both* sides, and the left half of that
+  cannot be scrolled to.
+- Canvas backing store is at `scale * devicePixelRatio`, clamped to what
+  the browser will allocate (`clampBackingScale`); layout stays in
   logical px so the overlay's `pt * currentScale` math is unaffected.
 - **`state.lastFitMode` is not `state.zoomMode`.** The wheel keys off the
   fit mode the user last *chose*; `zoomMode` flips to `'custom'` the moment

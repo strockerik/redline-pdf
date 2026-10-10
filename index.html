@@ -122,9 +122,11 @@
             Open a PDF, drag one onto this window, or add a blank page from the toolbar.<br>
             Everything happens on this device — nothing is uploaded anywhere.
           </p>
+          <p id="emptyStamp"></p>
         </div>
         <div id="pageStack" style="display:none;">
           <canvas id="pageCanvas"></canvas>
+          <canvas id="plotCanvas"></canvas>
           <div id="annoLayer">
             <svg id="leaderSvg" aria-hidden="true"></svg>
           </div>
@@ -132,7 +134,14 @@
       </div>
 
       <div id="footerNote">
-        Runs entirely on this device · nothing uploads · work is saved automatically to this browser
+        <span>Runs entirely on this device · nothing uploads · work is saved automatically to this browser</span>
+        <!-- Which build this is. The number is the service worker's CACHE
+             version (sw.js); bump both together on every deploy, and put
+             today's date and a few words on what changed. If the page
+             shows an older line than this file does, the installed app is
+             still serving a cached copy. tests/analyze.py checks the two
+             numbers agree. -->
+        <span id="buildStamp">rev 15 · 2026-10-10 · large CAD sheets drawn by the GPU</span>
       </div>
     </div>
   </div>

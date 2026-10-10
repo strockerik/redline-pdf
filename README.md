@@ -23,6 +23,9 @@ and it works with no network connection once installed.
   pen widths.
 - **Zoom** — fit width, fit page, 25–600% in steps, pinch on trackpad
   and touchscreen.
+- **Large drawings** — full-size sheets plotted from CAD, with millions
+  of line segments, are compiled once and drawn by the GPU, so they open
+  in a couple of seconds and stay sharp at any zoom.
 - **Save** — write back over the file you opened (⌘S), or save a copy
   somewhere else (⇧⌘S). Opening a second file merges it in, and a merged
   document has no single file to save back to, so ⌘S asks where to put
@@ -117,6 +120,7 @@ js/pages.js             import, blank pages, delete, rotate, reorder
 js/view.js              page canvas, zoom, thumbnails, reorder gesture
 js/annots.js            text box + callout tools, pointer interactions
 js/export.js            pdf-lib output
+js/plot*.js             large vector sheets: compile in a worker, draw with WebGL
 js/main.js              wiring and boot
 vendor/                 pdf-lib 1.17.1, pdf.js 3.11.174 (pinned)
 tests/                  headless checks — see below
@@ -142,6 +146,9 @@ one document tab into another. It covers the parts that are painful to verify by
   land in native PDF space at each rotation
 - that rotating a page carries its annotations along, reversibly and
   without accumulating drift
+- the plot compiler: that strokes, fills, clips, colours and dashes come
+  out as the right geometry, and that what is left for pdf.js to draw is
+  layered correctly
 - export: page counts, rotations, duplicated source pages, blank pages,
   non-WinAnsi characters, and that batched `copyPages` really is smaller
   than copying per page

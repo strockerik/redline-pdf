@@ -1,2 +1,5 @@
 .DS_Store
 tests/chrome-profile*/
+
+# Working PDFs dropped in the repo root — client drawings, never published.
+/*.pdf

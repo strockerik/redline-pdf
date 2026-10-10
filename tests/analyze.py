@@ -245,6 +245,31 @@ def check_cache_bumped(precached):
         ok("CACHE is newer than every precached file", version)
 
 
+def check_build_stamp():
+    """The footer says which build is running, so a stale installed copy
+    can be told from a current one at a glance. That only works if the
+    number on the page is the number the service worker caches under."""
+    cache = re.search(r"const CACHE = 'redline-v(\d+)'", read("sw.js"))
+    stamp = re.search(r'id="buildStamp">\s*rev (\d+) · (\d{4})-(\d{2})-(\d{2}) · \S', read("index.html"))
+    if not stamp:
+        fail("index.html carries a build stamp",
+             'expected <span id="buildStamp">rev N · YYYY-MM-DD · what changed</span>')
+        return
+    rev, y, mo, d = stamp.groups()
+    try:
+        import datetime
+        datetime.date(int(y), int(mo), int(d))
+    except ValueError:
+        fail("build stamp has a real date", f"{y}-{mo}-{d}")
+        return
+    if not cache or cache.group(1) != rev:
+        fail("build stamp matches the service worker's CACHE",
+             f"index.html says rev {rev}, sw.js caches under "
+             f"{'redline-v' + cache.group(1) if cache else 'an unrecognised name'} — bump them together")
+    else:
+        ok("build stamp matches the service worker's CACHE", f"rev {rev}, {y}-{mo}-{d}")
+
+
 def check_relative_paths():
     """Pages serves from /redline-pdf/, so a root-absolute path works on
     localhost and 404s in production. Everything must stay './'."""
@@ -339,6 +364,13 @@ def check_dead_exports():
     for name, text in consumers.items():
         for mod, names in scan_imports(text):
             imported.update(names)
+
+    # The browser suite reaches exports through a dynamic import() inside
+    # a string of JavaScript, which no import scan will ever see. A name it
+    # mentions is in use.
+    smoke = read("tests", "browser", "smoke.py")
+    for f in modules:
+        imported.update(n for n in scan_exports(sources[f]) if re.search(rf"\b{re.escape(n)}\b", smoke))
 
     dead, self_used = [], []
     for f in modules:
@@ -452,6 +484,7 @@ def main():
     print("=== service worker ===")
     precached = check_precache()
     check_cache_bumped(precached)
+    check_build_stamp()
 
     print("\n=== paths ===")
     check_relative_paths()

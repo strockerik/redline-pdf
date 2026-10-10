@@ -362,6 +362,8 @@ async function boot() {
   wireUi();
   updateTitle();
   updateToolbarState();
+  // One stamp in index.html, shown in two places.
+  $('emptyStamp').textContent = $('buildStamp').textContent;
 
   if (new URLSearchParams(location.search).has('selftest')) {
     const { runRotMathTests } = await import('./rotmath.test.js');

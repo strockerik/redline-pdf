@@ -1,4 +1,6 @@
 shots/
 fixture.pdf
+heavy-fixture.pdf
+heavy-hex-fixture.pdf
 __pycache__/
 *.pyc
