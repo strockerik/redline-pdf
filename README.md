@@ -30,8 +30,10 @@ and it works with no network connection once installed.
   somewhere else (⇧⌘S). Opening a second file merges it in, and a merged
   document has no single file to save back to, so ⌘S asks where to put
   it rather than overwriting whichever file happened to be first.
-- **Autosave** — the session is kept in IndexedDB, so closing the window
-  or having iOS evict the app doesn't lose work.
+- **Nothing lingers** — documents close with the app, and every launch
+  starts empty. Only your fit mode, colour, text size and pen size are
+  remembered. Save before you quit; closing with unsaved notes asks first
+  on a Mac, but an iPhone that evicts the app in the background does not.
 
 ## Install
 
@@ -115,7 +117,7 @@ index.html              markup and module bootstrap
 app.css                 all styles
 js/state.js             data model, rotation math, shared state
 js/files.js             open / save / file-handler launch queue
-js/persist.js           IndexedDB autosave and restore
+js/persist.js           the preferences kept between launches
 js/pages.js             import, blank pages, delete, rotate, reorder
 js/view.js              page canvas, zoom, thumbnails, reorder gesture
 js/annots.js            text box + callout tools, pointer interactions
@@ -164,7 +166,7 @@ tests/browser/run.sh            # add --headless for speed (see below)
 
 Checks driving Chrome over the DevTools Protocol — boot, import,
 rasterisation, zoom, rotate, drag-reorder, the wheel modes, tool shortcuts,
-save (⇧⌘S then ⌘S) and session restore, with screenshots at each stage in
+save (⇧⌘S then ⌘S), a relaunch, tabs and Finder launches, with screenshots at each stage in
 `tests/browser/shots/`. Needs Chrome and stdlib Python; no node, no npm. The
 only stubbed seam is `showSaveFilePicker`, so the export still runs for real
 and the bytes are reopened with pdf.js to prove they parse.

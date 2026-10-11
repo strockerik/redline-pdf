@@ -223,8 +223,8 @@ window.showSaveFilePicker = async (opts) => {
   const name = (opts && opts.suggestedName) || 'untitled.pdf';
   const rec = { name, chunks: [], closed: 0 };
   window.__saved.push(rec);
-  // Methods are non-enumerable so the handle stays structured-cloneable,
-  // like the real FileSystemFileHandle persist.js expects to store.
+  // Methods are non-enumerable, so the stand-in is a plain data object
+  // with behaviour attached, as a real FileSystemFileHandle is.
   const handle = { kind: 'file', name };
   const def = (k, v) => Object.defineProperty(handle, k, { value: v, enumerable: false });
   def('queryPermission', async () => 'granted');
@@ -362,11 +362,11 @@ LAUNCH_STUB = r"""
 def launch_checks(ws):
     """Double-clicking a PDF in Finder, with Redline as its handler.
 
-    The file has to open, as itself. It used to race the session restore
-    for the live document: arrive first and the restore overwrote it —
-    the file never appeared, only its thumbnail, stuck to page 1 of the
-    restored document — arrive second and it was merged into whatever the
-    session held. Either way the saved session is what the user saw.
+    The file has to open, as itself, and be the only thing there: every
+    launch starts empty. When sessions were saved, the file raced the
+    restore for the live document and lost — the session is what appeared.
+    A second file, opened while the app is running, gets a tab of its own
+    rather than being merged into the first.
     """
     print("\n=== opened from Finder ===")
 
@@ -385,15 +385,12 @@ def launch_checks(ws):
           };
         })()""", awaitp=True)
 
+    before = docs()
+    check("documents are open before the relaunch", any(not x.endswith(":0") for x in before["all"]), str(before["all"]))
     ev(ws, """(async () => {
-      const p = await import('./js/persist.js');
-      const s = await import('./js/state.js');
-      await p.flushSave();
-      s.markDirty(false);          // or beforeunload blocks the navigation
+      (await import('./js/state.js')).markDirty(false);     // or beforeunload blocks the navigation
       localStorage.setItem('redlineTestLaunch', '1');
     })()""", awaitp=True)
-    before = docs()
-    check("a session is saved to come back to", before["n"] >= 1 and any(not x.endswith(":0") for x in before["all"]), str(before["all"]))
 
     ws.call("Page.navigate", {"url": URL})
     wait_for(ws, "!!window.__bootLaunch", timeout=30, label="relaunched with a file waiting")
@@ -402,9 +399,7 @@ def launch_checks(ws):
     d = docs()
     check("the file opened from Finder is the document on screen",
           d["active"] == "launched.pdf" and d["pages"] == 3, str(d))
-    check("in a tab of its own", d["n"] == before["n"] + 1, f"{before['n']} documents before, {d['n']} after")
-    rest = sorted(x for x in d["all"] if not x.startswith("launched.pdf:"))
-    check("and the restored session is left as it was", rest == sorted(before["all"]), f"{rest} vs {sorted(before['all'])}")
+    check("and the only one — nothing from the last run came back", d["all"] == ["launched.pdf:3"], str(d["all"]))
     target = ev(ws, """(async () => {
       const { state } = await import('./js/state.js');
       return { name: state.fileHandle && state.fileHandle.name, combined: state.combined, dirty: state.dirty };
@@ -421,17 +416,22 @@ def launch_checks(ws):
     time.sleep(0.5)
     d2 = docs()
     check("a file opened while Redline is running gets another tab",
-          d2["n"] == d["n"] + 1 and d2["active"] == "second.pdf" and d2["pages"] == 3, str(d2))
+          d2["n"] == 2 and d2["active"] == "second.pdf" and d2["pages"] == 3, str(d2))
     check("rather than being merged into the one before", "launched.pdf:3" in d2["all"], str(d2["all"]))
     # Both documents number their pages from 1. A cache keyed by that
     # number hands the first document's thumbnails to the second.
     fresh = ev(ws, "[...document.querySelectorAll('#thumbList canvas')].every((c) => !c.dataset.seen)")
     check("its thumbnails are its own, not the previous document's", fresh is True)
 
+    # Nothing may be written to IndexedDB on the way: a file handle saved
+    # there as the browser shuts down is what crashed Chrome at exit.
+    dbs = ev(ws, "(async () => (await indexedDB.databases()).map((d) => d.name))()", awaitp=True)
+    check("no database holds the session or its file handles", dbs == [], str(dbs))
+
 
 def tab_checks(ws):
-    """Open in Tabs, and the thing most likely to lose work quietly: two
-    open documents autosaving over each other.
+    """Open in Tabs: each file its own document, with its own pages, name
+    and save target, and nothing one tab does reaching into another.
 
     Runs in its own browser instance — tabs change what a "document" is, so
     the single-document assumptions of the main flow do not survive it.
@@ -445,8 +445,11 @@ def tab_checks(ws):
             n: s.state.docs.length,
             active: s.state.docName,
             pages: s.state.pages.length,
-            all: s.state.docs.map(d => d.docName + ':' +
-                 (d.id === s.state.activeDocId ? s.state.pages.length : d.pages.length)),
+            // The active document's name and pages live in `state`; its
+            // record is stale until the next capture.
+            all: s.state.docs.map(d => d.id === s.state.activeDocId
+              ? s.state.docName + ':' + s.state.pages.length
+              : d.docName + ':' + d.pages.length),
           };
         })()""", awaitp=True)
 
@@ -487,52 +490,15 @@ def tab_checks(ws):
           f"{ev(ws, 'document.querySelectorAll(\'#thumbList .thumb\').length')} thumbs")
     shot(ws, "09-tabs")
 
-    # --- the part that would lose work quietly ---
-    # Both documents autosave to one IndexedDB record. If the snapshot took
-    # a stale copy of the inactive tab, or wrote only the active one, the
-    # reload below brings back the wrong thing.
-    ev(ws, """(async () => {
-      const p = await import('./js/persist.js');
-      const s = await import('./js/state.js');
-      await p.flushSave();
-      // A dirty document raises the beforeunload dialog, which blocks
-      // Page.navigate until CDP dismisses it — a harness trap, not a bug.
-      s.markDirty(false);
-    })()""", awaitp=True)
-
-    ws.call("Page.navigate", {"url": URL})
-    wait_for(ws, "!!document.getElementById('pageCanvas')")
-    ok = wait_for(ws, "document.querySelectorAll('#tabStrip .tab').length === 2", timeout=30)
-    check("both documents come back after a reload", ok,
-          ev(ws, "document.getElementById('statusMsg').textContent"))
-    time.sleep(1.5)
-    d = docs()
-    check("neither tab clobbered the other's autosave",
-          sorted(d["all"]) == ["alpha.pdf:3", "beta.pdf:4"], str(d["all"]))
-
-    # Clear All empties the active document. It must not take the other
-    # tabs' saved copies with it — they share one IndexedDB record, and
-    # deleting it wiped work that was still sitting on screen looking fine.
-    stored = """(async () => {
-      const p = await import('./js/persist.js');
-      const snap = await p.loadSession();
-      return snap ? snap.docs.map(d => d.docName + ':' + d.pages.length).join(', ')
-                  : '<NO RECORD>';
-    })()"""
-    ev(ws, """(async () => {
-      const p = await import('./js/persist.js');
-      await p.flushSave();
-    })()""", awaitp=True)
+    # Clear All empties the active document, and only that one.
     active = ev(ws, "(async()=>(await import('./js/state.js')).state.docName)()", awaitp=True)
-    other = "beta.pdf" if active == "alpha.pdf" else "alpha.pdf"
+    other = "beta.pdf:4" if active == "alpha.pdf" else "alpha.pdf:3"
     ev(ws, "window.confirm = () => true")
     click(ws, "#btnClearAll")
-    time.sleep(2.5)
-    rec = str(ev(ws, stored, awaitp=True))
-    check("Clear All keeps the other tab's saved copy",
-          other in rec and rec != "<NO RECORD>", f"cleared {active}; record now: {rec}")
-    check("Clear All did empty the active document",
-          docs()["pages"] == 0, str(docs()))
+    time.sleep(1.5)
+    d = docs()
+    check("Clear All leaves the other tab alone", other in d["all"] and d["n"] == 2, f"cleared {active}; now {d['all']}")
+    check("Clear All did empty the active document", d["pages"] == 0, str(d))
 
     close = ev(ws, "!!document.querySelector('#tabStrip .tab .tab-close')")
     check("tabs offer a close control", close is True)
@@ -1276,60 +1242,60 @@ def main():
         shot(ws, "06-saved")
 
         # ---------------------------------------------- 8. autosave restore
-        print("\n=== session restore ===")
+        print("\n=== a relaunch starts empty ===")
+        # Documents close with the app; only preferences are kept. Plant a
+        # session database of the kind older versions left behind, change
+        # every preference, and come back.
+        ev(ws, """(async () => {
+          await new Promise((res, rej) => {
+            const r = indexedDB.open('redline', 1);
+            r.onupgradeneeded = () => r.result.createObjectStore('session');
+            r.onsuccess = () => { const t = r.result.transaction('session', 'readwrite');
+              t.objectStore('session').put({ version: 2, docs: [] }, 'current');
+              t.oncomplete = () => { r.result.close(); res(); }; };
+            r.onerror = () => rej(r.error);
+          });
+          document.getElementById('btnFitPage').click();
+          document.querySelectorAll('#colorGrp .swatch')[2].click();
+          document.querySelectorAll('#penSizeGrp .pen-dot')[2].click();
+          const sel = document.getElementById('fontSizeSelect');
+          sel.value = [...sel.options].map((o) => o.value).filter((v) => v !== sel.value).pop();
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+          window.__font = sel.value;
+          (await import('./js/state.js')).markDirty(false);   // or beforeunload blocks the navigation
+        })()""", awaitp=True)
+        font = ev(ws, "window.__font")
+        had = ev(ws, "document.querySelectorAll('#thumbList .thumb').length")
         ws.call("Page.navigate", {"url": URL})
-        wait_for(ws, "!!document.getElementById('pageCanvas')", label="reload")
-        ok = wait_for(ws, "document.querySelectorAll('#thumbList .thumb').length === 3", timeout=30)
-        check("session restored from IndexedDB after reload", ok,
-              ev(ws, "document.getElementById('statusMsg').textContent"))
-        order2 = ev(ws, "[...document.querySelectorAll('#thumbList .thumb')].map(t=>t.dataset.pageId)")
-        check("restored page order matches", order2 == order1, f"{order2} vs {order1}")
-        # The re-render is async and a restored session may come back at a
-        # large zoom, so poll rather than sampling the instant thumbs appear.
-        INK = """(() => {
-          const c = document.getElementById('pageCanvas');
-          const d = c.getContext('2d').getImageData(0,0,c.width,c.height).data;
-          let dark = 0;
-          for (let i = 0; i < d.length; i += 4) if (d[i] < 200 && d[i+3] > 0) dark++;
-          return dark;
-        })()"""
-        wait_for(ws, f"{INK} > 500", timeout=20)
-        restored_ink = ev(ws, INK)
-        if restored_ink <= 500:
-            # Known pre-existing bug, not a regression — see KNOWN-ISSUES.md.
-            # The data restores fine; the render pipeline deadlocks. This
-            # probe distinguishes the two so a future failure here isn't
-            # mistaken for the detached-ArrayBuffer trap.
-            print("      probe:", ev(ws, """(async () => {
-              const s = await import('./js/state.js');
-              const v = await import('./js/view.js');
-              const t = (p, ms) => Promise.race([
-                p.then(() => 'resolved').catch(e => String(e).slice(0, 120)),
-                new Promise(r => setTimeout(() => r('HUNG'), ms))]);
-              const page = s.state.pages.find(p => p.id === s.state.selectedPageId);
-              const src = s.state.sources.find(x => x.id === page.sourceId);
-              // Bypass both the render queue and the shared canvas: if a
-              // throwaway canvas paints fine, the document and worker are
-              // healthy and the fault is ours, not pdf.js's.
-              const pg = await src.pdfjsDoc.getPage(page.sourcePageIndex + 1);
-              const vp = pg.getViewport({ scale: 1 });
-              const fresh = document.createElement('canvas');
-              fresh.width = Math.ceil(vp.width); fresh.height = Math.ceil(vp.height);
-              return {
-                sourceBytes: src.bytes.byteLength,      // data intact?
-                numPages: src.pdfjsDoc.numPages,
-                getPage: await t(src.pdfjsDoc.getPage(page.sourcePageIndex + 1), 5000),
-                thumbCanvases: document.querySelectorAll('#thumbList canvas').length,
-                rAF: await window.__rafAlive(),
-                oplist: await t(pg.getOperatorList(), 5000),
-                freshCanvas: await t(
-                  pg.render({ canvasContext: fresh.getContext('2d'), viewport: vp }).promise, 6000),
-                render: await t(v.renderMainCanvas(), 8000),
-              };
-            })()""", awaitp=True))
-        check("restored page re-rasterises (ArrayBuffer not detached)", restored_ink > 500,
-              f"{restored_ink} dark px")
-        shot(ws, "07-restored")
+        wait_for(ws, "document.querySelectorAll('#colorGrp .swatch').length > 0", timeout=30, label="relaunched")
+        time.sleep(1.5)
+        now = ev(ws, """(async () => {
+          const { state } = await import('./js/state.js');
+          return {
+            thumbs: document.querySelectorAll('#thumbList .thumb').length,
+            pages: state.pages.length, docs: state.docs.length,
+            empty: getComputedStyle(document.getElementById('emptyState')).display,
+            dbs: (await indexedDB.databases()).map((d) => d.name),
+            fit: state.zoomMode, fitBtn: document.getElementById('btnFitPage').classList.contains('toggled'),
+            color: state.currentColor,
+            swatch: [...document.querySelectorAll('#colorGrp .swatch')].findIndex((n) => n.classList.contains('selected')),
+            pen: state.currentPenSize,
+            dot: [...document.querySelectorAll('#penSizeGrp .pen-dot')].findIndex((n) => n.classList.contains('toggled')),
+            font: String(state.currentFontSize), fontSel: document.getElementById('fontSizeSelect').value,
+          };
+        })()""", awaitp=True)
+        check("there was a document open before", had == 3, f"{had} pages")
+        check("nothing is reopened after a relaunch",
+              now["thumbs"] == 0 and now["pages"] == 0 and now["docs"] == 1 and now["empty"] != "none", str(now))
+        check("a session database left by an older version is removed", "redline" not in now["dbs"], str(now["dbs"]))
+        check("the fit mode is remembered", now["fit"] == "fit-page" and now["fitBtn"] is True, f"{now['fit']}")
+        check("the colour is remembered, and the toolbar shows it", now["color"] == "#1f6feb" and now["swatch"] == 2,
+              f"{now['color']}, swatch {now['swatch']}")
+        check("the pen size is remembered, and the toolbar shows it", now["pen"] == 5 and now["dot"] == 2,
+              f"{now['pen']}, dot {now['dot']}")
+        check("the text size is remembered, and the toolbar shows it", now["font"] == font and now["fontSel"] == font,
+              f"{now['font']} / {now['fontSel']} vs {font}")
+        shot(ws, "07-relaunched")
 
         print("\n=== console ===")
         ws.drain(0.6)

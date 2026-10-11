@@ -75,7 +75,7 @@ export const state = {
 
   domRefs: {},              // annoId -> {boxEl, textEl, lineEl, wing1, wing2, tipHandle}
 
-  // Document identity, for the save/restore path
+  // Document identity, for the save path
   docName: 'Untitled.pdf',
   fileHandle: null,         // FileSystemFileHandle when opened via Finder/picker
   // True once pages from a second file have been merged in. Such a
@@ -286,7 +286,7 @@ const dirtyListeners = [];
 export function onDirtyChange(fn) { dirtyListeners.push(fn); }
 
 /** Call after any change that would be lost on close. Drives the title
- *  bar dot, the beforeunload guard, and the autosave debounce. */
+ *  bar dot and the beforeunload guard. */
 export function markDirty(isDirty = true) {
   state.dirty = isDirty;
   for (const fn of dirtyListeners) fn(isDirty);

@@ -1,6 +1,6 @@
 /* Bootstrap: wire the DOM to the modules and boot the app. */
 import {
-  state, COLORS, PEN_SIZES, resetDocument, captureActiveDoc,
+  state, COLORS, PEN_SIZES, resetDocument,
   setStatus, onDirtyChange,
 } from './state.js';
 import {
@@ -23,12 +23,8 @@ import {
 } from './files.js';
 import {
   installTabs, ensureInitialDoc, openDocument, renderTabs, refreshActiveTab,
-  setTabsChangeHandler,
 } from './tabs.js';
-import {
-  scheduleSave, flushSave, clearSession, loadSession, restoreSession,
-  installAutosaveTriggers,
-} from './persist.js';
+import { loadPrefs, installPrefSaving, forgetSavedSession } from './persist.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -77,9 +73,7 @@ function buildPenSizes() {
   }
 }
 
-/** Re-mark the active preset from state. The toolbar is built before
- *  restoreSession() overwrites currentPenSize, so without this the
- *  highlight can disagree with the width the pen will actually draw. */
+/** Re-mark the active preset from state. */
 function syncPenSizeUi() {
   const grp = $('penSizeGrp');
   if (!grp) return;
@@ -270,24 +264,11 @@ function wireUi() {
     if (state.selectedPageId) deletePage(state.selectedPageId);
   });
 
-  $('btnClearAll').addEventListener('click', async () => {
+  $('btnClearAll').addEventListener('click', () => {
+    // Clear All empties *this* document. The other tabs are not its to touch.
     if (!clearAll()) return;
     resetDocument();
     invalidateAllThumbs();
-
-    // Clear All empties *this* document. It used to delete the whole
-    // session record, which is shared by every tab — so clearing one
-    // document silently threw away the saved copy of all the others,
-    // while they sat there on screen looking fine.
-    //
-    // Capture first: the active document's record still holds its
-    // pre-clear pages until it does, and the check below reads records.
-    captureActiveDoc();
-    if (state.docs.some((d) => d.pages.length)) {
-      await flushSave();          // other tabs still have work worth keeping
-    } else {
-      await clearSession();       // genuinely nothing left to remember
-    }
 
     renderTabs();
     updateTitle();
@@ -327,11 +308,10 @@ function wireUi() {
 
   installStageGestures(stepPage);
   installTabs();
-  setTabsChangeHandler(() => scheduleSave());
   installDragAndDrop();
   installLaunchHandler(booted);
   installKeyboard();
-  installAutosaveTriggers();
+  installPrefSaving();
   installServiceWorker();
 
   // Re-fit on resize (and on orientation change, which fires resize).
@@ -341,11 +321,10 @@ function wireUi() {
     resizeTimer = setTimeout(() => renderMainCanvas(), 120);
   });
 
-  // Autosave and the title dot both hang off the dirty flag.
-  onDirtyChange((dirty) => {
+  // The title dot and the tab's dot both hang off the dirty flag.
+  onDirtyChange(() => {
     updateTitle();
     refreshActiveTab();
-    if (dirty) scheduleSave();
   });
 
   window.addEventListener('beforeunload', (e) => {
@@ -358,13 +337,15 @@ function wireUi() {
 // ============================================================
 // Boot
 // ============================================================
-// Resolved once boot has finished, restored session and all. Anything
-// that arrives from outside in the meantime — a file from Finder — waits
-// on it rather than racing the restore for `state`.
+// Resolved once boot has finished. Anything that arrives from outside in
+// the meantime — a file from Finder — waits on it rather than writing to
+// `state` while boot is still setting it up.
 let bootDone;
 const booted = new Promise((resolve) => { bootDone = resolve; });
 
 async function boot() {
+  // Before the toolbar exists, so that it is built from them.
+  loadPrefs();
   wireUi();
   updateTitle();
   updateToolbarState();
@@ -380,25 +361,8 @@ async function boot() {
     );
   }
 
-  try {
-    const snap = await loadSession();
-    if (snap && await restoreSession(snap)) {
-      // restoreSession fills state.docs itself; this only covers the
-      // single-document case where it did not.
-      ensureInitialDoc();
-      renderTabs();
-      syncPenSizeUi();
-      renderThumbnails();
-      renderMainCanvas();
-      updateTitle();
-      const when = new Date(snap.savedAt || Date.now());
-      setStatus(`Restored your last session (${when.toLocaleString()})`, 'ok');
-      return;
-    }
-  } catch (err) {
-    console.error('session restore failed', err);
-  }
-
+  // Every launch starts empty: documents close with the app (persist.js).
+  forgetSavedSession();
   ensureInitialDoc();
   renderTabs();
   renderThumbnails();

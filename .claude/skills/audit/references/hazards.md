@@ -55,24 +55,24 @@ The richest source of bugs in this app, because the failures are silent.
 ## 3. Cross-module invariants
 
 - **Capture before you read.** `state` holds the *active* document; each
-  tab's record is stale between switches. `snapshot()` calls
-  `captureActiveDoc()` first, or the visible tab autosaves whatever it held
-  at the last switch.
+  tab's record is stale between switches. Anything that walks `state.docs`
+  must take the active one's name and pages from `state`, or call
+  `captureActiveDoc()` first. The browser suite's own helper got this
+  wrong and reported a correctly opened file as "Untitled.pdf".
 - **Caches keyed by ids that are not globally unique.** Page ids restart
   per document, and the thumbnail cache was keyed by page id — so it had
   to be flushed on every path that replaces the live document, and one
-  was missed twice: opening in a new tab, and a session restore landing
-  on top of a file opened from Finder, which left that file's thumbnail
-  on page 1 of a different document. It is keyed by the page object now.
+  was missed twice: opening in a new tab, and (when sessions were saved) a
+  restore landing on top of a file opened from Finder, which left that
+  file's thumbnail on page 1 of a different document. It is keyed by the
+  page object now.
   Prefer identity to an id plus a flush you have to remember.
 - **Two things written to `state` during boot.** The launch handler and
-  the session restore are both asynchronous and both replace the live
+  the session restore were both asynchronous and both replaced the live
   document. Whichever finished second won: the double-clicked file was
-  either overwritten or merged into the session. Anything that can arrive
-  before boot is over must wait for it (`booted` in main.js).
-- **Flags that must ride along in persistence.** `combined` marks a
-  document with no single file to save back to. Left out of the snapshot, a
-  restore hands it back its overwrite target and the data-loss bug returns.
+  either overwritten or merged into the session. The restore is gone, but
+  the rule stands — anything that can arrive before boot is over must wait
+  for it (`booted` in main.js).
 - **Two canvases can be showing the page.** Heavy vector pages are drawn
   by WebGL into `#plotCanvas`; `#pageCanvas` stays in the layout at full
   size because annots.js measures against it, but is blank. Anything that
@@ -172,15 +172,37 @@ and are miserable to spot by eye.
 
 ## 8. Persistence
 
-- **Is everything structured-cloneable?** A plain object carrying methods
-  is not, and the autosave fails silently with a console warning.
-- **Is transient state leaking into the snapshot?** A `pointerId` used for
-  drag bookkeeping reached the saved annotation before it was stripped.
-- **Does a restore rebuild every derived object?** pdf.js detaches the
-  ArrayBuffer it is handed, so each consumer needs its own `bytes.slice(0)`
-  — including the restore path.
-- **Schema changes need a fallback.** Snapshots written before tabs are
-  read as a single-tab session rather than discarded.
+There is almost none, on purpose. Documents close with the app; every
+launch starts empty; `persist.js` keeps four preferences in localStorage.
+
+- **Do not bring back the saved session.** It existed (IndexedDB, every
+  open document with its bytes and file handle, rewritten after each edit
+  and again as the window closed) and it was removed for cause:
+  - it reopened drawings nobody wanted reopened;
+  - it raced whatever arrived at launch (see §3);
+  - **it crashed Chrome.** With a `FileSystemFileHandle` from the current
+    session in the snapshot — a dropped file, a file opened from Finder —
+    Chrome 154 hit a fatal check in its own code at exit (`Detected
+    dangling raw_ptr in unretained`, browser process, `shutdown-type:
+    close`). The crash itself is invisible, but a launch that lands while
+    that Chrome is dying leaves the app running with no window, which the
+    user reported as "Redline isn't opening". Measured in a clean profile:
+    2 crashes in 2 quits with session saving, 0 in 4 without. A bare page
+    that stored a handle mid-session and then sat idle did *not* crash, so
+    the write on the way out is the likely trigger; that last step is
+    inference, not measurement.
+- **A file handle never goes into storage,** and nothing but one short
+  string is written at unload. If a feature seems to need either, it
+  needs a different design.
+- **Is transient state leaking into what is kept?** Preferences only. A
+  zoom level is not one — it belonged to a document that is gone, and
+  restoring it opened the next file at 600%.
+- **Unsaved work has one guard: `beforeunload`.** It prompts on desktop.
+  iOS shows no such prompt and evicts backgrounded web apps without
+  warning, so on a phone unsaved notes can be lost. That trade was made
+  knowingly.
+- **pdf.js detaches the ArrayBuffer it is handed,** so each consumer needs
+  its own `bytes.slice(0)`.
 
 ## 9. Design, empathy, simplicity
 
@@ -188,7 +210,7 @@ and are miserable to spot by eye.
   label, tooltip, status line — and the *comments* — still describe what
   happens? A grab cursor that does not grab is a lie; so was the comment
   claiming Space-pan worked while the pen swallowed it.
-- **What happens the second time?** After a reload, a restore, a tab
+- **What happens the second time?** After a reload, a relaunch, a tab
   switch, a repeated gesture, a second file. Nearly every bug in this
   repo's recent history was a second-time bug, not a first-time one.
 - **What happens on the phone?** Touch has no hover, the rail becomes a

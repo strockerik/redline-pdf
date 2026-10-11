@@ -14,23 +14,17 @@ import {
 
 const $ = (id) => document.getElementById(id);
 
-let onChange = null;   // called after any switch/open/close, for autosave
-
-export function setTabsChangeHandler(fn) { onChange = fn; }
-
 // ============================================================
 // Model
 // ============================================================
-/** Adopt whatever is already in `state` as the first document. Called at
- *  boot, after any session restore, so the fields the restore wrote are
- *  the ones the first tab gets. */
+/** Adopt whatever is already in `state` as the first document. Called
+ *  once, at boot. */
 export function ensureInitialDoc() {
   if (state.docs.length) return activeDoc();
   const doc = blankDoc();
   state.docs.push(doc);
   state.activeDocId = doc.id;
-  // Take the live fields rather than the blank ones — a restore may have
-  // already filled them in.
+  // Take the live fields rather than the blank ones.
   captureActiveDoc();
   return doc;
 }
@@ -67,7 +61,6 @@ function switchToDoc(id) {
   updateTitle();
   renderThumbnails();
   renderMainCanvas();
-  onChange?.();
 }
 
 function closeDoc(id) {
@@ -97,7 +90,6 @@ function closeDoc(id) {
   updateTitle();
   renderThumbnails();
   renderMainCanvas();
-  onChange?.();
 }
 
 // ============================================================
@@ -172,7 +164,6 @@ export function installTabs() {
     renderThumbnails();
     renderMainCanvas();
     markDirty(false);
-    onChange?.();
   });
   renderTabs();
 }

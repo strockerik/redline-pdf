@@ -40,7 +40,7 @@ are vendored in `vendor/` as classic scripts and expose globals
 js/state.js     data model, rotation math, shared state — no imports, no
                 side effects; sits at the bottom of the dep graph
 js/files.js     open / save / launchQueue file handler
-js/persist.js   IndexedDB autosave and restore
+js/persist.js   the few preferences kept between launches (localStorage)
 js/pages.js     import, blank pages, delete, rotate, reorder
 js/view.js      page canvas, zoom, thumbnails, reorder gesture
 js/annots.js    text box + callout tools, pointer interactions
@@ -68,16 +68,23 @@ per-document field (`pages`, `sources`, `docName`, `fileHandle`,
 via `captureActiveDoc` / `loadDocIntoState` in state.js. So view.js,
 annots.js, pages.js and export.js never learned about tabs. Two
 consequences worth knowing: **capture before you read a doc record** —
-the active tab's record is stale between switches, which is why
-`snapshot()` calls `captureActiveDoc()` first — and **page ids restart
+the active tab's record is stale between switches — and **page ids restart
 per document**, so nothing may be cached by page id alone. The thumbnail
 cache is keyed by the page object for exactly that reason.
 
+**Documents close with the app. Nothing is reopened, and nothing about a
+document is ever stored.** Every launch starts empty; only the fit mode,
+colour, text size and pen size are kept (persist.js, localStorage). This
+is a decision, not an omission: the saved session nobody wanted raced
+every file opened from Finder, and — with a file handle in it — made
+Chrome crash at exit. Don't bring back autosave, and above all don't put
+a `FileSystemFileHandle` into IndexedDB. Unsaved work is guarded by the
+`beforeunload` prompt alone, which iOS does not show.
+
 **Anything that arrives from outside waits for boot.** A file opened from
-Finder reaches the launch handler before the saved session has been read
-back; importing it straight away meant the restore then overwrote it. The
-handler awaits `booted` (main.js) and opens each file in its own tab —
-never into whatever document happens to be live.
+Finder reaches the launch handler while boot is still running. The handler
+awaits `booted` (main.js) and opens each file in its own tab — never into
+whatever document happens to be live.
 
 ## The part that breaks if you're careless
 
@@ -103,7 +110,7 @@ error that only shows up on 90°/270° pages and is miserable to eyeball.
 ## Other gotchas
 
 - **pdf.js detaches the ArrayBuffer** it's handed. Every consumer needs
-  its own `bytes.slice(0)` — including session restore.
+  its own `bytes.slice(0)`.
 - **Bump `CACHE` in `sw.js` on every deploy, and the build stamp with
   it.** Otherwise the installed app keeps serving the previous version
   from cache. The stamp is the `#buildStamp` line in index.html — `rev N ·

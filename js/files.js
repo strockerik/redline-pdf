@@ -45,12 +45,9 @@ async function openFromHandle(handle, { asPrimary = true } = {}) {
  *  a PDF from Finder, the handle arrives here — at launch, and again for
  *  every later double-click while the window is open.
  *
- *  Each file becomes its own document, in its own tab. It used to be
- *  imported into whatever was live, which went wrong both ways round:
- *  once the saved session was back it was merged into that document, and
- *  before then it was simply overwritten when the restore finished — the
- *  file you double-clicked never appeared, only the session did. So this
- *  waits for `ready` (boot, including the restore) before touching state.
+ *  Each file becomes its own document, in its own tab — never merged into
+ *  whatever happens to be live — and not until `ready` (boot) is over, so
+ *  nothing here writes to `state` while boot is still setting it up.
  */
 export function installLaunchHandler(ready) {
   if (!('launchQueue' in window)) return;

@@ -968,9 +968,9 @@ export function isTypingTarget(el) {
 // Not by page id. Ids restart at 1 in every document, so an id-keyed cache
 // hands one document's thumbnail to another's page whenever the live
 // document is replaced without a flush — and that has happened twice: on a
-// tab switch, and when a session restore landed on top of a file opened
-// from Finder, leaving that file's thumbnail on a page it did not belong
-// to. An object can only ever be itself.
+// tab switch, and when (in the days of saved sessions) a restore landed on
+// top of a file opened from Finder, leaving that file's thumbnail on a
+// page it did not belong to. An object can only ever be itself.
 let thumbCache = new WeakMap();
 
 export function invalidateThumb(pageId) {

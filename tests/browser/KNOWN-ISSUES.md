@@ -44,8 +44,10 @@ sections, consistently. Neither
 `--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding`,
 `--disable-features=CalculateNativeWinOcclusion`, nor a permanent
 `Page.startScreencast` brought it back, so the suite now **runs headful by
-default**. `--headless` is still there and is faster; expect the
-session-restore check to fail spuriously under it.
+default**. `--headless` is still there and is faster; expect checks that
+wait on a page render late in the run to fail spuriously under it. (The
+session restore this was first seen on no longer exists — documents close
+with the app — but the stall is headless Chrome's, not that feature's.)
 
 ### Hypotheses that were tried and are wrong
 
@@ -87,8 +89,8 @@ render per **canvas**.
 
 pdf.js used to start a dedicated Web Worker per `getDocument()` call, and
 since nothing here calls `.destroy()`, a moderate session left **27 live
-worker threads**. `js/pages.js` now exports a lazily-created shared
-`PDFWorker` that both it and `js/persist.js` pass to every `getDocument`.
+worker threads**. `js/pages.js` now keeps a lazily-created shared
+`PDFWorker` and passes it to every `getDocument`.
 Re-measured with the same 24-document probe: **27 worker targets -> 4**,
 and that 4 includes the service worker.
 
@@ -96,5 +98,5 @@ Still open, but bounded: the *documents* are still never destroyed, so
 their parsed structures and byte copies stay in memory until the tab goes
 away. That grows with what the user actually opens rather than with every
 render, which is why it is logged rather than fixed — adding `destroy()`
-calls to the re-import, tab-close and restore paths is real complexity in
+calls to the re-import and tab-close paths is real complexity in
 the load path for a leak nobody has hit.
