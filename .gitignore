@@ -3,3 +3,6 @@ tests/chrome-profile*/
 
 # Working PDFs dropped in the repo root — client drawings, never published.
 /*.pdf
+
+# Scratch folder for the UX-review design canvas (not part of the app).
+.ux-review/

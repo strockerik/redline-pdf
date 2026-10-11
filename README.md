@@ -18,9 +18,16 @@ and it works with no network connection once installed.
   document; **Open in Tabs…** (⇧⌘O) gives each its own tab instead, with
   its own pages, notes and save target. ⌘T opens an empty one. The strip
   appears only once a second document is open.
-- **Mark up** — plain text boxes, text boxes with a leader line pointing
-  at something, and a freehand pen. Five colors, six text sizes, three
-  pen widths.
+- **Mark up** — text boxes, callouts with a leader, a freehand pen, a
+  highlighter, arrows, boxes and revision clouds. Six colours, six text
+  sizes, three line weights. A tool stays in hand until you put it away
+  (Esc), so twenty callouts are twenty placements. Notes get a white fill
+  so they read over dense linework; ⌘D duplicates one, ⌘C / ⌘V carries it
+  to another sheet.
+- **Undo** — ⌘Z takes back anything: a stroke, a move, an edit, a rotated
+  or deleted page, even Clear All. Nothing asks "are you sure?".
+- **Find your way** — a page field (type a number, press Return), and a
+  **Markups** list of every markup in the document; click one to go to it.
 - **Zoom** — fit width, fit page, 25–600% in steps, pinch on trackpad
   and touchscreen.
 - **Large drawings** — full-size sheets plotted from CAD, with millions
@@ -31,10 +38,13 @@ and it works with no network connection once installed.
   delete it; so can Acrobat, Bluebeam or Preview. **Flatten…** saves a
   copy with the markups painted in for good, and leaves the one you have
   open alone.
-- **Save** — write back over the file you opened (⌘S), or save a copy
-  somewhere else (⇧⌘S). Opening a second file merges it in, and a merged
-  document has no single file to save back to, so ⌘S asks where to put
-  it rather than overwriting whichever file happened to be first.
+- **Save** — write back over the file you opened (⌘S). Save As, Download,
+  Save Flattened Copy, Open and Clear All are in the menu beside it.
+  Opening a second file merges it in, and a merged document has no single
+  file to save back to, so ⌘S asks where to put it rather than
+  overwriting whichever file happened to be first. The header says how
+  many changes are unsaved and when you last saved; a save that fails
+  stays on screen until you deal with it, with a way out.
 - **Nothing lingers** — documents close with the app, and every launch
   starts empty. Only your fit mode, colour, text size and pen size are
   remembered. Save before you quit; closing with unsaved notes asks first
@@ -67,12 +77,18 @@ sheet, and saving downloads to the Files app.
 | ⌘T | New tab |
 | ⌘S | Save over the opened file |
 | ⇧⌘S | Save As |
+| ⌘Z / ⇧⌘Z | Undo / redo |
+| ⌘D | Duplicate the selected markup |
+| ⌘C / ⌘V | Copy the selected markup / paste it on this page |
 | ⌘+ / ⌘− | Zoom in / out |
 | ⌘0 / ⌘9 | Fit width / fit page |
-| T / Q | Text box / text with leader |
-| P | Pen (freehand) |
-| Esc | Cancel tool, deselect |
-| Delete | Delete selected note |
+| V | Select |
+| T / Q | Text box / callout |
+| P / H | Pen / highlighter |
+| A / R / C | Arrow / box / revision cloud |
+| Esc | Put the tool away, deselect |
+| Delete | Delete the selected markup |
+| ? | Show this list in the app |
 | ← → ↑ ↓ | Previous / next page |
 | double-click | Latch the wheel into zoom (Esc or double-click to exit) |
 | drag | Pan the page (default) |
@@ -125,8 +141,11 @@ js/files.js             open / save / file-handler launch queue
 js/persist.js           the preferences kept between launches
 js/pages.js             import, blank pages, delete, rotate, reorder
 js/view.js              page canvas, zoom, thumbnails, reorder gesture
-js/annots.js            text box + callout tools, pointer interactions
+js/annots.js            the markup tools and their pointer interactions
 js/export.js            pdf-lib output
+js/history.js           undo / redo
+js/tabs.js              document tabs
+js/chrome.js            file menu, properties row, page field, markups list, save state
 js/plot*.js             large vector sheets: compile in a worker, draw with WebGL
 js/main.js              wiring and boot
 vendor/                 pdf-lib 1.17.1, pdf.js 3.11.174 (pinned)
@@ -159,6 +178,8 @@ one document tab into another. It covers the parts that are painful to verify by
 - markups as annotations: written with an appearance stream that fills
   its rectangle, read back unchanged at every rotation, removed from the
   document on the way in, flattened on request, and refused when malformed
+- undo: what a checkpoint holds, that restoring one never aliases it, and
+  when the document may call itself saved
 - export: page counts, rotations, duplicated source pages, blank pages,
   non-WinAnsi characters, and that batched `copyPages` really is smaller
   than copying per page
@@ -173,14 +194,15 @@ tests/browser/run.sh            # add --headless for speed (see below)
 ```
 
 Checks driving Chrome over the DevTools Protocol — boot, import,
-rasterisation, zoom, rotate, drag-reorder, the wheel modes, tool shortcuts,
-save (⇧⌘S then ⌘S), a relaunch, tabs and Finder launches, with screenshots at each stage in
+rasterisation, zoom, rotate, drag-reorder, the wheel modes, every tool,
+undo and redo, the file menu, save (⇧⌘S then ⌘S) and a refused save, a
+relaunch, tabs and Finder launches, with screenshots at each stage in
 `tests/browser/shots/`. Needs Chrome and stdlib Python; no node, no npm. The
 only stubbed seam is `showSaveFilePicker`, so the export still runs for real
 and the bytes are reopened with pdf.js to prove they parse.
 
-One check is currently red against a known pre-existing bug — see
-`tests/browser/KNOWN-ISSUES.md`.
+The suite has no expected failures; `tests/browser/KNOWN-ISSUES.md` is
+the history of the ones it used to have.
 
 ### The one genuinely hard part
 

@@ -1,13 +1,14 @@
 /* Page assembly: import, blank pages, delete, rotate, reorder. */
 import {
-  state, normRot, toNative, toVisual, estimateBoxHeight,
-  setStatus, markDirty, BLANK_SIZES,
+  state, normRot, toNative, toVisual, estimateBoxHeight, isPointShape,
+  setStatus, markDirty, resetDocument, finishTyping, BLANK_SIZES, MOD_KEY,
 } from './state.js';
 import {
   renderThumbnails, renderMainCanvas, updateThumbSelection,
   invalidateThumb, invalidateAllThumbs, updateTitle,
 } from './view.js';
 import { takeMarkups } from './export.js';
+import { checkpoint, startFresh } from './history.js';
 
 const { PDFDocument } = PDFLib;
 
@@ -27,8 +28,14 @@ function pdfWorker() {
 // Import
 // ============================================================
 /** Load a PDF into `sources` and append its pages to the document.
- *  Returns the id of the first page added, or null on failure. */
-export async function importPdfBytes(bytes, name) {
+ *  Returns the id of the first page added, or null on failure.
+ *
+ *  A file landing in an empty document *is* that document: it takes the
+ *  file's name, and `handle` if there is one becomes where ⌘S writes.
+ *  Landing among pages that are already there, it is an edit — one that
+ *  can be undone — and no handle is adopted, because the result is not
+ *  that file any more. */
+export async function importPdfBytes(bytes, name, { handle = null } = {}) {
   try {
     // pdf-lib keeps views into the buffer it parsed; pdf.js transfers (and
     // detaches) the one it is handed. So they can never share one.
@@ -43,6 +50,11 @@ export async function importPdfBytes(bytes, name) {
       ? await pdfLibDoc.save({ useObjectStreams: false, updateFieldAppearances: false })
       : bytes.slice(0);
     const pdfjsDoc = await pdfjsLib.getDocument({ data: forPdfjs, worker: pdfWorker() }).promise;
+
+    // Decided here, after the slow part: only now is it known what the
+    // file is landing in.
+    const opening = !state.pages.length && !state.sources.length;
+    if (!opening) checkpoint(`Add ${name}`);
 
     const sourceId = state.nextSourceId++;
     state.sources.push({ id: sourceId, name, pdfLibDoc, pdfjsDoc });
@@ -91,7 +103,16 @@ export async function importPdfBytes(bytes, name) {
       if (firstNew === null) firstNew = page.id;
     }
 
-    markDirty();
+    if (opening) {
+      state.docName = name;
+      state.fileHandle = handle;
+      startFresh();
+      // Opening a file is not a change to it.
+      markDirty(false);
+      updateTitle();
+    } else {
+      markDirty();
+    }
     renderThumbnails();
     if (!state.selectedPageId) selectPage(firstNew);
     // After the import message, not before — otherwise it is overwritten
@@ -134,6 +155,7 @@ export function addBlankPage(sizeKey) {
     const cur = state.pages.findIndex((p) => p.id === state.selectedPageId);
     if (cur >= 0) idx = cur + 1;
   }
+  checkpoint('Add blank page');
   state.pages.splice(idx, 0, page);
 
   markDirty();
@@ -147,11 +169,13 @@ export function addBlankPage(sizeKey) {
 export function deletePage(pageId) {
   const idx = state.pages.findIndex((p) => p.id === pageId);
   if (idx < 0) return;
-  if (!confirm('Delete this page? This cannot be undone.')) return;
 
-  state.pages.splice(idx, 1);
+  // No "are you sure?": undo is the way back, and says so.
+  checkpoint('Delete page');
   invalidateThumb(pageId);
+  state.pages.splice(idx, 1);
   markDirty();
+  setStatus(`Deleted page ${idx + 1} — ${MOD_KEY}Z brings it back.`, 'ok');
 
   if (state.selectedPageId === pageId) {
     const next = state.pages[idx] || state.pages[idx - 1] || null;
@@ -179,8 +203,8 @@ export function remapAnnotationsForRotation(page, oldR, newR) {
   if (normRot(oldR) === normRot(newR)) return;
 
   for (const a of page.annotations) {
-    // Ink has no box — remap the points themselves and move on.
-    if (a.type === 'ink') {
+    // A point shape has no box — remap the points themselves and move on.
+    if (isPointShape(a)) {
       for (const p of a.points) {
         const n = toNative(oldR, page.W0, page.H0, p.x, p.y);
         const v = toVisual(newR, page.W0, page.H0, n.x, n.y);
@@ -211,6 +235,7 @@ export function rotatePage(pageId, delta) {
   const oldR = page.rotation;
   const newR = normRot(oldR + delta);
 
+  checkpoint('Rotate page');
   remapAnnotationsForRotation(page, oldR, newR);
   page.rotation = newR;
   invalidateThumb(pageId);
@@ -225,6 +250,7 @@ export function reorderPage(movedId, targetId, before) {
   const fromIdx = state.pages.findIndex((p) => p.id === movedId);
   if (fromIdx < 0) return;
 
+  checkpoint('Move page');
   const [moved] = state.pages.splice(fromIdx, 1);
   let toIdx = state.pages.findIndex((p) => p.id === targetId);
   if (toIdx < 0) toIdx = state.pages.length;
@@ -238,18 +264,33 @@ export function reorderPage(movedId, targetId, before) {
 // ============================================================
 // Selection
 // ============================================================
+/** Resolves once the page has been drawn and its markups are in the DOM. */
 export function selectPage(pageId) {
+  if (pageId !== state.selectedPageId) finishTyping();
   state.selectedPageId = pageId;
   state.selectedAnnoId = null;
   state.pendingCalloutTip = null;
   updateThumbSelection();
-  renderMainCanvas();
+  return renderMainCanvas();
 }
 
+/** Previous or next page — the arrow keys, the wheel, and the buttons
+ *  either side of the page field. False at either end. */
+export function stepPage(dir) {
+  const idx = state.pages.findIndex((p) => p.id === state.selectedPageId);
+  if (idx < 0) return false;
+  const next = state.pages[idx + dir];
+  if (!next) return false;
+  selectPage(next.id);
+  return true;
+}
+
+/** Empty this document. Like everything else, it can be undone. */
 export function clearAll() {
-  if (!state.pages.length) return;
-  if (!confirm('Remove all pages from this document and start over? '
-              + 'This cannot be undone.')) return false;
+  if (!state.pages.length) return false;
+  checkpoint('Clear all');
+  resetDocument();
   invalidateAllThumbs();
+  setStatus(`Cleared — ${MOD_KEY}Z brings it back.`, 'ok');
   return true;
 }

@@ -14,12 +14,15 @@
  */
 import {
   state, toNative, textCompensationDegrees, hexToRgb01, normRot,
-  computeAttachPoint, computeArrowWings, ANNO_PAD, LINE_HEIGHT_MULT,
+  computeAttachPoint, computeArrowWings, shapePolylines, isPointShape, POINT_TYPES,
+  ANNO_PAD, LINE_HEIGHT_MULT, HIGHLIGHT_OPACITY,
 } from './state.js';
 
 const {
   PDFDocument, PDFPage, PDFDict, PDFName, PDFRef, PDFString, PDFHexString,
-  StandardFonts, rgb, degrees, LineCapStyle,
+  StandardFonts, rgb, degrees, LineCapStyle, LineJoinStyle,
+  pushGraphicsState, popGraphicsState, setGraphicsState, setStrokingColor,
+  setLineWidth, setLineCap, setLineJoin, moveTo, lineTo, stroke,
 } = PDFLib;
 
 // Round caps and joins are what make a chain of straight segments read as
@@ -91,6 +94,16 @@ export function drawAnnotationOnPage(pdfPage, font, a, R, W0, H0) {
     }
     return;
   }
+  // The other point shapes are stroked as whole paths, from the same
+  // polylines the editor draws on screen.
+  if (isPointShape(a)) {
+    const lines = shapePolylines(a).map((line) => line.map((p) => toNative(R, W0, H0, p.x, p.y)));
+    strokePaths(pdfPage, lines, {
+      thickness: a.size || 2.5, color,
+      ...(a.type === 'highlight' ? { opacity: HIGHLIGHT_OPACITY, multiply: true } : {}),
+    });
+    return;
+  }
   const { lines, lineHeight, boxHeight } = layoutNote(a, font);
 
   // An axis-aligned box in visual space stays axis-aligned in native
@@ -102,9 +115,11 @@ export function drawAnnotationOnPage(pdfPage, font, a, R, W0, H0) {
   const nx0 = Math.min(c0.x, c1.x), nx1 = Math.max(c0.x, c1.x);
   const ny0 = Math.min(c0.y, c1.y), ny1 = Math.max(c0.y, c1.y);
 
+  // The fill is opaque on purpose: a note over dense linework is only
+  // readable with nothing showing through it. Without one, just the frame.
   pdfPage.drawRectangle({
     x: nx0, y: ny0, width: nx1 - nx0, height: ny1 - ny0,
-    color: rgb(1, 1, 1), opacity: 0.88,
+    ...(a.fill === false ? {} : { color: rgb(1, 1, 1) }),
     borderColor: color, borderWidth: 1.1,
   });
 
@@ -136,11 +151,48 @@ export function drawAnnotationOnPage(pdfPage, font, a, R, W0, H0) {
   }
 }
 
+/** Stroke polylines (already in native space) as one path, with round
+ *  caps and joins.
+ *
+ *  One path rather than a line per segment because of the highlighter: it
+ *  is translucent, and every overlap between separately stroked segments
+ *  would show as a darker bead along the stroke. It multiplies with the
+ *  sheet, so linework stays black under it instead of going grey. */
+function strokePaths(pdfPage, lines, { thickness, color, opacity = 1, multiply = false }) {
+  const ops = [pushGraphicsState()];
+  if (opacity < 1 || multiply) {
+    const gs = pdfPage.doc.context.obj({
+      Type: 'ExtGState', CA: opacity, ...(multiply ? { BM: 'Multiply' } : {}),
+    });
+    ops.push(setGraphicsState(pdfPage.node.newExtGState('GS', gs)));
+  }
+  ops.push(
+    setStrokingColor(color), setLineWidth(thickness),
+    setLineCap(LineCapStyle.Round), setLineJoin(LineJoinStyle.Round),
+  );
+  let drew = false;
+  for (const pts of lines) {
+    if (!pts.length) continue;
+    ops.push(moveTo(pts[0].x, pts[0].y));
+    // A lone point still gets a zero-length segment, which round caps
+    // turn into a dot.
+    for (let i = 1; i < Math.max(2, pts.length); i++) {
+      const p = pts[Math.min(i, pts.length - 1)];
+      ops.push(lineTo(p.x, p.y));
+    }
+    drew = true;
+  }
+  if (!drew) return;
+  ops.push(stroke(), popGraphicsState());
+  pdfPage.pushOperators(...ops);
+}
+
 // ============================================================
 // Markups that stay editable
 //
 // Each one is written as a standard annotation (FreeText, FreeText with a
-// callout line, or Ink) whose appearance stream is the very drawing that
+// callout line, Ink, Line, Square or a cloudy Polygon) whose appearance
+// stream is the very drawing that
 // flattening would have put on the page. So it looks the same either way,
 // and any viewer shows it.
 //
@@ -159,8 +211,10 @@ function markupBounds(a, font, R, W0, H0) {
   const pts = [];
   let pad = BOUNDS_PAD;
   let inner = null;                       // the note's own box, for callouts
-  if (a.type === 'ink') {
-    for (const p of a.points || []) pts.push(p);
+  if (isPointShape(a)) {
+    // The polylines, not the raw points: an arrow's head and a cloud's
+    // scallops reach beyond the two points that define them.
+    for (const line of shapePolylines(a)) for (const p of line) pts.push(p);
     pad += (a.size || 2.5) / 2;
   } else {
     const { boxHeight } = layoutNote(a, font);
@@ -226,19 +280,32 @@ async function attachMarkup(outDoc, pdfPage, font, a, R, W0, H0, serial) {
     [MARKUP_KEY]: PDFHexString.fromText(JSON.stringify(markupPayload(a, R))),
   };
 
-  if (a.type === 'ink') {
-    const list = [];
-    for (const p of a.points) {
+  if (isPointShape(a)) {
+    // The standard fields say what kind of markup this is to any other
+    // program; what it looks like is the appearance stream above.
+    const flat = (points) => points.flatMap((p) => {
       const n = toNative(R, W0, H0, p.x, p.y);
-      list.push(r2(n.x), r2(n.y));
+      return [r2(n.x), r2(n.y)];
+    });
+    Object.assign(dict, { C: rgbArr, BS: { W: a.size || 2.5 } });
+    const first = a.points[0], last = a.points[a.points.length - 1];
+    if (a.type === 'arrow') {
+      Object.assign(dict, { Subtype: 'Line', L: flat([first, last]), LE: ['None', 'OpenArrow'] });
+    } else if (a.type === 'rect') {
+      Object.assign(dict, { Subtype: 'Square' });
+    } else if (a.type === 'cloud') {
+      const corners = [first, { x: last.x, y: first.y }, last, { x: first.x, y: last.y }];
+      Object.assign(dict, { Subtype: 'Polygon', Vertices: flat(corners), IT: 'PolygonCloud', BE: { S: 'C', I: 1 } });
+    } else {
+      Object.assign(dict, { Subtype: 'Ink', InkList: [flat(a.points)] });
+      if (a.type === 'highlight') dict.CA = HIGHLIGHT_OPACITY;
     }
-    Object.assign(dict, { Subtype: 'Ink', InkList: [list], C: rgbArr, BS: { W: a.size || 2.5 } });
   } else {
     Object.assign(dict, {
       Subtype: 'FreeText',
       Contents: PDFHexString.fromText(a.text || ''),
       DA: PDFString.of(`${rgbArr.join(' ')} rg /Helv ${a.fontSize} Tf`),
-      C: [1, 1, 1],                                    // a FreeText's /C is its background
+      ...(a.fill === false ? {} : { C: [1, 1, 1] }),   // a FreeText's /C is its background
       BS: { W: 1.1 },
       // How far the note's own box sits inside the Rect.
       RD: [r2(inner.left - box.left), r2(inner.bottom - box.bottom), r2(box.right - inner.right), r2(box.top - inner.top)],
@@ -258,17 +325,21 @@ async function attachMarkup(outDoc, pdfPage, font, a, R, W0, H0, serial) {
  *  are relative to — visual space moves when the page is turned. */
 function markupPayload(a, R) {
   const p = { v: 1, R: normRot(R), type: a.type, color: a.color };
-  if (a.type === 'ink') {
+  if (isPointShape(a)) {
     p.size = a.size || 2.5;
     p.points = a.points.map((q) => [r2(q.x), r2(q.y)]);
   } else {
     Object.assign(p, { x: r2(a.x), y: r2(a.y), width: r2(a.width), text: a.text || '', fontSize: a.fontSize });
     if (a.type === 'callout') { p.tipX = r2(a.tipX); p.tipY = r2(a.tipY); }
+    // Written only when it is off, so a file saved before notes had the
+    // option reads back the way it was drawn: filled.
+    if (a.fill === false) p.fill = false;
   }
   return p;
 }
 
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+const TWO_POINT = new Set(['arrow', 'rect', 'cloud']);
 const LIMIT = 1e5;                 // pt; no page is this large
 const fin = (v, lo = -LIMIT, hi = LIMIT) => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
 
@@ -280,20 +351,23 @@ function readPayload(p) {
   if (!fin(p.R, 0, 360)) return null;
   const R = normRot(p.R);
 
-  if (p.type === 'ink') {
+  if (POINT_TYPES.has(p.type)) {
     if (!Array.isArray(p.points) || !p.points.length || p.points.length > 200000 || !fin(p.size, 0.05, 100)) return null;
+    // An arrow, a box and a cloud are exactly two points; anything else
+    // under those names is not something this editor drew.
+    if (TWO_POINT.has(p.type) && p.points.length !== 2) return null;
     const points = [];
     for (const q of p.points) {
       if (!Array.isArray(q) || !fin(q[0]) || !fin(q[1])) return null;
       points.push({ x: q[0], y: q[1] });
     }
-    return { R, markup: { type: 'ink', color: p.color, size: p.size, points } };
+    return { R, markup: { type: p.type, color: p.color, size: p.size, points } };
   }
 
   if (p.type !== 'text' && p.type !== 'callout') return null;
   if (!fin(p.x) || !fin(p.y) || !fin(p.width, 1) || !fin(p.fontSize, 2, 400)) return null;
   if (typeof p.text !== 'string' || p.text.length > 50000) return null;
-  const markup = { type: p.type, x: p.x, y: p.y, width: p.width, text: p.text, fontSize: p.fontSize, color: p.color };
+  const markup = { type: p.type, x: p.x, y: p.y, width: p.width, text: p.text, fontSize: p.fontSize, color: p.color, fill: p.fill !== false };
   if (p.type === 'callout') {
     if (!fin(p.tipX) || !fin(p.tipY)) return null;
     markup.tipX = p.tipX;

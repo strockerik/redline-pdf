@@ -40,6 +40,8 @@ export function loadPrefs() {
   if (COLORS.includes(p.color)) state.currentColor = p.color;
   if (Number.isFinite(p.fontSize) && p.fontSize >= 4 && p.fontSize <= 144) state.currentFontSize = p.fontSize;
   if (PEN_SIZES.some((s) => s.width === p.penSize)) state.currentPenSize = p.penSize;
+  if (COLORS.includes(p.highlightColor)) state.currentHighlightColor = p.highlightColor;
+  if (typeof p.fill === 'boolean') state.currentFill = p.fill;
 }
 
 function savePrefs() {
@@ -49,6 +51,8 @@ function savePrefs() {
       color: state.currentColor,
       fontSize: state.currentFontSize,
       penSize: state.currentPenSize,
+      highlightColor: state.currentHighlightColor,
+      fill: state.currentFill,
     }));
   } catch { /* private mode, storage full: preferences are not worth an error */ }
 }

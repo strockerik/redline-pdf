@@ -4,7 +4,7 @@ Drives real Chrome over CDP with real input events. The only seam is
 window.showSaveFilePicker, replaced with an in-page fake handle so the
 save path runs to completion without a native panel nobody can click.
 """
-import base64, json, os, shutil, sys, tempfile, time
+import base64, json, os, re, shutil, sys, tempfile, time
 import cdp
 
 PORT = int(os.environ.get("PORT", "8000"))
@@ -128,6 +128,10 @@ def shot(ws, name):
 
 
 def click(ws, selector):
+    # Every file command but Save lives in the menu behind its chevron;
+    # reaching one means opening that first, as a person would.
+    if selector != "#btnFileMenu" and ev(ws, f"!!document.querySelector({json.dumps(selector)})?.closest('#fileMenu[hidden]')"):
+        click(ws, "#btnFileMenu")
     box = ev(ws, f"""(() => {{
       const el = document.querySelector({json.dumps(selector)});
       if (!el) return null;
@@ -545,7 +549,7 @@ def markup_checks(ws):
       };
     })()""")
     before = ev(ws, "(async () => { const { state } = await import('./js/state.js'); return { name: state.docName, n: state.pages[0].annotations.length, handle: !!state.fileHandle }; })()", awaitp=True)
-    stem = ev(ws, "document.getElementById('filenameInput').value.replace(/\\.pdf$/i, '')")
+    stem = ev(ws, "(async()=>(await import('./js/state.js')).state.docName.replace(/\\.pdf$/i, ''))()", awaitp=True)
     click(ws, "#btnFlatten")
     wait_for(ws, "!!window.__flat", timeout=20, label="Flatten wrote a file")
     flat = ev(ws, """(async () => {
@@ -572,6 +576,461 @@ def markup_checks(ws):
     check("the open document kept its markups and its identity",
           {k: flat["keep"][k] for k in ("name", "n", "handle")} == before, f"{flat['keep']} vs {before}")
     shot(ws, "12-flattened")
+
+
+def surface_checks(ws):
+    """The command surface, driven the way a person drives it: undo for
+    every action, tools that stay in hand, the four shape tools, one Save,
+    a save state said in words, and a failed save that does not fade."""
+    print("\n=== undo, armed tools and the command surface ===")
+
+    ST = """(async () => {
+      const { state } = await import('./js/state.js');
+      const { historyStatus } = await import('./js/history.js');
+      const p = state.pages.find((x) => x.id === state.selectedPageId);
+      return {
+        tool: state.activeTool, sel: state.selectedAnnoId, dirty: state.dirty,
+        pages: state.pages.length, page: state.pages.indexOf(p), rot: p ? p.rotation : null,
+        annos: p ? p.annotations.map((a) => ({ id: a.id, type: a.type, text: a.text, x: a.x, y: a.y,
+          width: a.width, fill: a.fill, size: a.size, color: a.color, points: a.points })) : [],
+        hist: historyStatus(), name: state.docName,
+        chip: document.getElementById('saveChipText').textContent,
+        chipShown: !document.getElementById('saveChip').hidden,
+        label: document.getElementById('propsLabel').textContent,
+        status: document.getElementById('statusMsg').textContent,
+      };
+    })()"""
+    st = lambda: ev(ws, ST, awaitp=True)
+    shown = lambda i: ev(ws, f"getComputedStyle(document.getElementById('{i}')).display") != "none"
+
+    def mouse(kind, x, y):
+        ws.call("Input.dispatchMouseEvent", {"type": kind, "x": x, "y": y, "button": "left",
+                                             "buttons": 0 if kind == "mouseReleased" else 1, "clickCount": 1})
+
+    def tap(x, y):
+        mouse("mousePressed", x, y)
+        mouse("mouseReleased", x, y)
+        time.sleep(0.2)
+
+    def drag(a, b, steps=8):
+        mouse("mousePressed", *a)
+        for i in range(1, steps + 1):
+            mouse("mouseMoved", a[0] + (b[0] - a[0]) * i / steps, a[1] + (b[1] - a[1]) * i / steps)
+            time.sleep(0.015)
+        mouse("mouseReleased", *b)
+        time.sleep(0.25)
+
+    def typed(text):
+        ws.call("Input.insertText", {"text": text})
+        time.sleep(0.15)
+
+    def to_client(x, y):
+        """Page points -> viewport pixels."""
+        g = ev(ws, """(async()=>{const {state}=await import('./js/state.js');
+          const r=document.getElementById('pageCanvas').getBoundingClientRect();
+          return {l:r.left,t:r.top,s:state.currentScale}})()""", awaitp=True)
+        return g["l"] + x * g["s"], g["t"] + y * g["s"]
+
+    esc = lambda: key(ws, "Escape", "Escape", 27)
+    undo = lambda: key(ws, "z", "KeyZ", 90, meta=True)
+    redo = lambda: key(ws, "z", "KeyZ", 90, meta=True, shift=True)
+
+    ev(ws, """(async () => {
+      const tabs = await import('./js/tabs.js'), pages = await import('./js/pages.js');
+      const view = await import('./js/view.js');
+      tabs.openDocument();
+      const buf = await (await fetch('./tests/browser/fixture.pdf')).arrayBuffer();
+      await pages.importPdfBytes(buf, 'surface.pdf');
+      view.setZoomMode('fit-width');
+      await view.renderMainCanvas();
+      // Nothing here may ask "are you sure?": undo is the way back.
+      window.__confirms = 0;
+      window.confirm = () => { window.__confirms++; return true; };
+    })()""", awaitp=True)
+    time.sleep(0.8)
+
+    # --- opening a file is not a change to it ---
+    s = st()
+    check("a file opened into an empty document takes its name", s["name"] == "surface.pdf", s["name"])
+    check("and is not unsaved work", s["dirty"] is False and s["chip"] == "No unsaved changes", f"{s['dirty']} {s['chip']!r}")
+    check("with nothing to undo", s["hist"]["canUndo"] is False
+          and ev(ws, "document.getElementById('btnUndo').disabled") is True)
+    check("the page field says where you are",
+          ev(ws, "document.getElementById('pageInput').value + ' ' + document.getElementById('pageTotal').textContent") == "1 / 3",
+          ev(ws, "document.getElementById('pageInput').value + ' ' + document.getElementById('pageTotal').textContent"))
+    check("the properties row is empty until there is something to style",
+          shown("propsNone") and not shown("colorGrp") and not shown("fontSizeGrp") and not shown("penSizeGrp"))
+
+    # --- a tool stays in hand until it is put away ---
+    click(ws, "#toolText")
+    check("arming a tool brings its properties and says it is armed",
+          shown("colorGrp") and shown("fontSizeGrp") and shown("fillGrp") and shown("armedNote") and not shown("penSizeGrp"))
+    tap(*stage_point(ws, 0.2, 0.15))
+    typed("First")
+    tap(*stage_point(ws, 0.7, 0.15))
+    s = st()
+    check("placing a note leaves the text tool armed", s["tool"] == "text" and len(s["annos"]) == 1, f"{s['tool']}, {len(s['annos'])}")
+    check("the click that ended the typing did not place another", [a["text"] for a in s["annos"]] == ["First"], str(s["annos"]))
+    tap(*stage_point(ws, 0.7, 0.15))
+    typed("Second")
+    esc()
+    s = st()
+    check("the next click does", [a["text"] for a in s["annos"]] == ["First", "Second"] and s["tool"] == "select", str(s))
+    check("placing and typing a note is one step to undo", s["hist"]["changes"] == 2, str(s["hist"]))
+
+    click(ws, "#toolText")
+    tap(*stage_point(ws, 0.45, 0.28))
+    esc()
+    s = st()
+    check("a note placed and left empty is taken away", len(s["annos"]) == 2)
+    check("and leaves nothing to undo", s["hist"]["changes"] == 2 and s["hist"]["undoLabel"] == "Add note", str(s["hist"]))
+
+    # Dragging with the text tool sets the width; a click still drops the default.
+    click(ws, "#toolText")
+    a, b = stage_point(ws, 0.15, 0.3), stage_point(ws, 0.55, 0.34)
+    scale = ev(ws, "(async()=>(await import('./js/state.js')).state.currentScale)()", awaitp=True)
+    drag(a, b)
+    typed("Sized by dragging")
+    esc()
+    s = st()
+    want = (b[0] - a[0]) / scale
+    got = s["annos"][-1]["width"] if len(s["annos"]) == 3 else None
+    check("dragging the text tool draws a box of that width", got is not None and abs(got - want) < 2, f"{got} vs {want:.1f}")
+    check("a clicked one keeps the default width", s["annos"][0]["width"] == 170, str(s["annos"][0]["width"]))
+
+    click(ws, "#toolCallout")
+    tap(*stage_point(ws, 0.12, 0.62)); tap(*stage_point(ws, 0.3, 0.5)); typed("One")
+    tap(*stage_point(ws, 0.9, 0.9))                    # ends the typing
+    tap(*stage_point(ws, 0.5, 0.62)); tap(*stage_point(ws, 0.68, 0.5)); typed("Two")
+    tap(*stage_point(ws, 0.9, 0.9))                    # a note keeps its text when it loses focus
+    s = st()
+    check("two callouts placed without going back to the toolbar",
+          [a["text"] for a in s["annos"] if a["type"] == "callout"] == ["One", "Two"] and s["tool"] == "callout", str(s["annos"]))
+    esc()
+
+    # --- highlight, arrow, box, cloud ---
+    for tool, a, b in (("toolArrow", (0.2, 0.7), (0.4, 0.66)), ("toolRect", (0.5, 0.68), (0.7, 0.78)),
+                       ("toolCloud", (0.15, 0.82), (0.45, 0.95)), ("toolHighlight", (0.55, 0.86), (0.85, 0.87))):
+        click(ws, "#" + tool)
+        drag(stage_point(ws, *a), stage_point(ws, *b))
+    s = st()
+    kinds = [a["type"] for a in s["annos"]]
+    check("each shape tool draws its own kind of markup", kinds[-4:] == ["arrow", "rect", "cloud", "highlight"], str(kinds))
+    check("an arrow, a box and a cloud are two points", all(len(a["points"]) == 2 for a in s["annos"][-4:-1]))
+    check("a highlight is a path, broad and in its own colour",
+          len(s["annos"][-1]["points"]) >= 3 and s["annos"][-1]["size"] >= 8 and s["annos"][-1]["color"] == "#e3b505",
+          str(s["annos"][-1]))
+    hl = ev(ws, """(() => {
+      const svg = document.getElementById('hiliteSvg');
+      return { n: svg.querySelectorAll('.ink-stroke').length, blend: getComputedStyle(svg).mixBlendMode,
+               inLeader: document.querySelectorAll('#leaderSvg .ink-stroke[stroke="#e3b505"]').length };
+    })()""")
+    check("it multiplies with the sheet instead of covering it", hl == {"n": 1, "blend": "multiply", "inLeader": 0}, str(hl))
+    check("the highlighter is still in hand", s["tool"] == "highlight" and s["label"] == "Highlight")
+    click(ws, "#toolArrow")
+    tap(*stage_point(ws, 0.9, 0.3))
+    check("a click with a two-point tool draws nothing", len(st()["annos"]) == len(kinds))
+    for k, code, vk, tool in (("h", "KeyH", 72, "highlight"), ("a", "KeyA", 65, "arrow"), ("r", "KeyR", 82, "rect"),
+                              ("c", "KeyC", 67, "cloud"), ("v", "KeyV", 86, "select")):
+        key(ws, k, code, vk)
+        if st()["tool"] != tool:
+            check(f"{k.upper()} picks the {tool} tool", False, st()["tool"])
+            break
+    else:
+        check("H, A, R, C and V pick their tools", True)
+    shot(ws, "09-surface")
+
+    # --- undo and redo ---
+    before = st()
+    undo()
+    s = st()
+    check("⌘Z undoes the last markup", [a["type"] for a in s["annos"]] == kinds[:-1], str([a["type"] for a in s["annos"]]))
+    check("and the count of unsaved changes follows", s["hist"]["changes"] == before["hist"]["changes"] - 1
+          and f"{s['hist']['changes']} unsaved changes" in s["chip"], f"{s['hist']} {s['chip']!r}")
+    check("and says what it undid", "highlight" in s["status"].lower(), s["status"])
+    redo()
+    check("⇧⌘Z brings it back", st()["annos"] == before["annos"])
+    check("the buttons do the same", ev(ws, "document.getElementById('btnUndo').disabled") is False)
+    click(ws, "#btnUndo")
+    check("Undo button undoes", len(st()["annos"]) == len(kinds) - 1)
+    click(ws, "#btnRedo")
+    check("Redo button redoes", st()["annos"] == before["annos"])
+
+    click(ws, "#btnRotateCW")
+    time.sleep(0.6)
+    turned = st()
+    undo()
+    time.sleep(0.6)
+    s = st()
+    check("a rotated page is un-rotated, markups and all", turned["rot"] == 90 and s["rot"] == 0 and s["annos"] == before["annos"],
+          f"{turned['rot']} -> {s['rot']}")
+
+    click(ws, "#btnDeletePage")
+    time.sleep(0.6)
+    gone = st()
+    check("a page is deleted without asking", gone["pages"] == 2 and ev(ws, "window.__confirms") == 0, f"{gone['pages']} pages")
+    check("and says how to get it back", "brings it back" in gone["status"], gone["status"])
+    undo()
+    time.sleep(0.8)
+    s = st()
+    check("⌘Z brings the page back, with its markups", s["pages"] == 3 and s["page"] == 0 and s["annos"] == before["annos"], f"{s['pages']} pages, on {s['page']}")
+    check("and its thumbnail", ev(ws, "document.querySelectorAll('#thumbList .thumb').length") == 3)
+
+    click(ws, "#btnClearAll")
+    time.sleep(0.5)
+    cleared = st()
+    check("Clear All empties the document without asking", cleared["pages"] == 0 and ev(ws, "window.__confirms") == 0)
+    undo()
+    time.sleep(0.8)
+    s = st()
+    check("and ⌘Z brings all of it back", s["pages"] == 3 and s["name"] == "surface.pdf" and s["annos"] == before["annos"],
+          f"{s['pages']} pages, {s['name']}")
+
+    # Inside a note ⌘Z belongs to the text, not the document.
+    x, y = to_client(s["annos"][0]["x"] + 20, s["annos"][0]["y"] + 10)
+    tap(x, y); tap(x, y)                                # select, then edit
+    check("a second click on a selected note opens it", ev(ws, "!!document.querySelector('.anno-box.editing')") is True)
+    undo()
+    check("⌘Z while typing leaves the document's history alone", st()["hist"] == s["hist"], str(st()["hist"]))
+    typed(" note")
+    esc()
+    s2 = st()
+    check("an edit to a note is one step", s2["annos"][0]["text"] == "First note" and s2["hist"]["undoLabel"] == "Edit note"
+          and s2["hist"]["changes"] == s["hist"]["changes"] + 1, f"{s2['annos'][0]['text']!r} {s2['hist']}")
+    undo()
+    check("which undo takes back", st()["annos"][0]["text"] == "First")
+    redo()
+
+    # --- the selected markup: fill, duplicate, copy and paste ---
+    tap(x, y)
+    s = st()
+    check("selecting a note shows what can be changed about it",
+          s["label"] == "Text" and shown("fillGrp") and shown("btnDuplicate") and shown("btnDeleteAnno")
+          and not shown("armedNote") and not shown("penSizeGrp"), s["label"])
+    check("a note has a white fill by default", ev(ws, "document.getElementById('fillToggle').checked") is True
+          and ev(ws, "getComputedStyle(document.querySelector('.anno-box.selected')).backgroundColor") == "rgb(255, 255, 255)",
+          ev(ws, "getComputedStyle(document.querySelector('.anno-box.selected')).backgroundColor"))
+    click(ws, "#fillToggle")
+    check("which can be turned off", st()["annos"][0]["fill"] is False
+          and ev(ws, "getComputedStyle(document.querySelector('.anno-box.selected')).backgroundColor") == "rgba(0, 0, 0, 0)",
+          ev(ws, "getComputedStyle(document.querySelector('.anno-box.selected')).backgroundColor"))
+    # The checkbox has focus now. It is not a place to type.
+    key(ws, "d", "KeyD", 68, meta=True)
+    s = st()
+    dup = s["annos"][-1]
+    check("⌘D duplicates the selected markup, just off the original",
+          len(s["annos"]) == len(kinds) + 1 and dup["text"] == "First note" and dup["fill"] is False
+          and abs(dup["x"] - s["annos"][0]["x"] - 12) < 0.01 and s["sel"] == dup["id"], str(dup))
+    key(ws, "c", "KeyC", 67, meta=True)
+    click(ws, "#btnNextPage")
+    time.sleep(0.6)
+    key(ws, "v", "KeyV", 86, meta=True)
+    s = st()
+    check("⌘C then ⌘V puts the same note on another page, in the same place",
+          s["page"] == 1 and len(s["annos"]) == 1 and s["annos"][0]["text"] == "First note"
+          and abs(s["annos"][0]["x"] - dup["x"]) < 0.01, str(s["annos"]))
+    key(ws, "v", "KeyV", 86, meta=True)
+    s = st()
+    check("pasting twice does not stack one exactly on the other",
+          len(s["annos"]) == 2 and abs(s["annos"][1]["x"] - s["annos"][0]["x"]) > 5, str([a["x"] for a in s["annos"]]))
+
+    # --- where you are ---
+    click(ws, "#pageInput")
+    typed("3")
+    key(ws, "Enter", "Enter", 13)
+    time.sleep(0.6)
+    check("typing a page number goes to it", st()["page"] == 2, str(st()["page"]))
+    click(ws, "#btnPrevPage")
+    time.sleep(0.5)
+    check("the arrow beside it steps back", st()["page"] == 1)
+    click(ws, "#pageInput")
+    typed("99")
+    key(ws, "Enter", "Enter", 13)
+    time.sleep(0.6)
+    check("a number past the end goes to the last page",
+          st()["page"] == 2 and ev(ws, "document.getElementById('pageInput').value") == "3",
+          f"{st()['page']} / {ev(ws, 'document.getElementById(\'pageInput\').value')}")
+    check("with nothing further to step to", ev(ws, "document.getElementById('btnNextPage').disabled") is True)
+
+    # --- every markup, in one list ---
+    total = ev(ws, "(async()=>(await import('./js/state.js')).state.pages.reduce((n,p)=>n+p.annotations.length,0))()", awaitp=True)
+    check("the Markups button counts them all", ev(ws, "document.getElementById('markupCount').textContent") == str(total), str(total))
+    stage_w = ev(ws, "document.getElementById('canvasStage').clientWidth")
+    click(ws, "#btnMarkups")
+    time.sleep(0.6)
+    rows = ev(ws, """(() => ({
+      rows: document.querySelectorAll('#markupList .markup-row').length,
+      heads: [...document.querySelectorAll('#markupList .markup-page')].map((n) => n.textContent),
+      first: document.querySelector('#markupList .markup-row').textContent,
+    }))()""")
+    check("and opens a list of every one, by page", rows["rows"] == total and rows["heads"] == ["PG 1", "PG 2"], str(rows))
+    check("a note is listed by what it says", "First note" in rows["first"], rows["first"])
+    check("the sheet gives up the width", ev(ws, "document.getElementById('canvasStage').clientWidth") < stage_w)
+    click(ws, "#markupList .markup-row")
+    time.sleep(0.9)
+    s = st()
+    check("clicking one goes to its page and selects it", s["page"] == 0 and s["sel"] == s["annos"][0]["id"]
+          and ev(ws, "!!document.querySelector('.anno-box.selected')") is True, f"page {s['page']}, sel {s['sel']}")
+    check("and marks it in the list", ev(ws, "document.querySelectorAll('#markupList .markup-row.current').length") == 1)
+    click(ws, "#btnCloseMarkups")
+    time.sleep(0.6)
+    esc()
+
+    # --- a shape, selected: its weight, moving it, reshaping it ---
+    s = st()
+    box = next(a for a in s["annos"] if a["type"] == "rect")
+    x0, x1 = sorted(p["x"] for p in box["points"])
+    y0, y1 = sorted(p["y"] for p in box["points"])
+    edge = to_client((x0 + x1) / 2, y0)
+    tap(*edge)
+    s = st()
+    check("clicking a shape's line selects it", s["sel"] == box["id"] and s["label"] == "Box", f"{s['sel']} {s['label']}")
+    check("and offers a weight rather than a text size", shown("penSizeGrp") and not shown("fontSizeGrp") and not shown("fillGrp"))
+    check("with a handle on each of its two points", ev(ws, "document.querySelectorAll('#leaderSvg .pt-handle').length") == 2)
+    click(ws, "#penSizeGrp .pen-dot:last-child")
+    check("the weight applies to the selected shape", next(a for a in st()["annos"] if a["id"] == box["id"])["size"] == 5)
+    scale = ev(ws, "(async()=>(await import('./js/state.js')).state.currentScale)()", awaitp=True)
+    drag(edge, (edge[0] + 40, edge[1] - 30))
+    moved = next(a for a in st()["annos"] if a["id"] == box["id"])
+    dx = [m["x"] - p["x"] for m, p in zip(moved["points"], box["points"])]
+    dy = [m["y"] - p["y"] for m, p in zip(moved["points"], box["points"])]
+    check("dragging a shape moves all of it", all(abs(d - 40 / scale) < 0.6 for d in dx) and all(abs(d + 30 / scale) < 0.6 for d in dy),
+          f"dx {dx} dy {dy} want {40 / scale:.1f}, {-30 / scale:.1f}")
+    check("and it is still selected afterwards", st()["sel"] == box["id"])
+    corner = to_client(moved["points"][1]["x"], moved["points"][1]["y"])
+    drag(corner, (corner[0] + 30, corner[1] + 20))
+    shaped = next(a for a in st()["annos"] if a["id"] == box["id"])
+    check("dragging a handle moves just that point",
+          abs(shaped["points"][1]["x"] - moved["points"][1]["x"] - 30 / scale) < 0.6
+          and shaped["points"][0] == moved["points"][0], str(shaped["points"]))
+    undo(); undo()
+    check("both of which undo", next(a for a in st()["annos"] if a["id"] == box["id"])["points"] == box["points"])
+    esc()
+
+    # --- one Save; everything else behind it ---
+    menu = ev(ws, """(() => ({
+      hidden: document.getElementById('fileMenu').hidden,
+      primaries: [...document.querySelectorAll('header button.primary')].map((b) => b.id),
+      loose: ['btnSaveAs', 'btnDownload', 'btnFlatten', 'btnOpen', 'btnOpenTabs', 'btnClearAll']
+        .filter((id) => !document.getElementById(id).closest('#fileMenu')),
+      flatten: document.getElementById('btnFlatten').textContent.trim(),
+    }))()""")
+    check("Save is the one primary action", menu["primaries"] == ["btnSave", "btnFileMenu"] and menu["hidden"] is True, str(menu))
+    check("every other file command is in its menu", menu["loose"] == [], str(menu["loose"]))
+    check("Flatten is named for what it does", menu["flatten"].startswith("Save Flattened Copy"), menu["flatten"])
+    click(ws, "#btnFileMenu")
+    check("the chevron opens the menu", ev(ws, "document.getElementById('fileMenu').hidden") is False
+          and ev(ws, "document.getElementById('btnFileMenu').getAttribute('aria-expanded')") == "true")
+    esc()
+    check("Esc closes it, and only it", ev(ws, "document.getElementById('fileMenu').hidden") is True)
+    click(ws, "#btnFileMenu")
+    tap(*stage_point(ws, 0.2, 0.9))                    # well clear of the menu itself
+    check("so does a click anywhere else", ev(ws, "document.getElementById('fileMenu').hidden") is True)
+    click(ws, "#btnShortcuts")
+    check("the shortcuts are written down somewhere", ev(ws, "document.getElementById('shortcutsDialog').open") is True
+          and ev(ws, "document.querySelectorAll('#shortcutsDialog dt').length") >= 20)
+    key(ws, "p", "KeyP", 80)
+    check("and the list does not pass keys through to the tools", st()["tool"] == "select")
+    click(ws, "#btnCloseShortcuts")
+    check("it closes", ev(ws, "document.getElementById('shortcutsDialog').open") is False)
+    names = ev(ws, """[...document.querySelectorAll('#colorGrp .swatch')].map((b) => b.getAttribute('aria-label')).join()
+      + '|' + document.getElementById('colorGrp').getAttribute('aria-label')
+      + '|' + document.getElementById('penSizeGrp').getAttribute('aria-label')""")
+    check("colours and weights are named, not numbered", names.startswith("Red,Black,Blue,Green,Purple,Amber|Colour|Line weight"), names)
+
+    # --- the save state, in words; a failed save, in the way ---
+    s = st()
+    check("unsaved work is counted on screen", s["dirty"] and s["chipShown"]
+          and re.match(r"^\d+ unsaved changes$", s["chip"]) is not None
+          and ev(ws, "document.getElementById('saveChip').classList.contains('unsaved')") is True, repr(s["chip"]))
+
+    ev(ws, """(async () => {
+      const { state } = await import('./js/state.js');
+      window.__writes = 0;
+      const handle = { kind: 'file', name: 'surface.pdf' };
+      const def = (k, v) => Object.defineProperty(handle, k, { value: v, enumerable: false, writable: true });
+      def('queryPermission', async () => 'prompt');
+      def('requestPermission', async () => 'denied');
+      def('createWritable', async () => ({ write: async () => { window.__writes++; }, close: async () => {} }));
+      state.fileHandle = handle;
+      window.__handle = handle;
+    })()""", awaitp=True)
+    key(ws, "s", "KeyS", 83, meta=True)
+    wait_for(ws, "document.getElementById('saveAlert').classList.contains('show')", timeout=15, label="save refused")
+    alert = ev(ws, "document.getElementById('saveAlert').innerText")
+    check("a refused save says nothing was written and the work is still here",
+          "Nothing was written" in alert and "still open" in alert and "declined" in alert, alert)
+    check("and offers the two ways out", shown("btnAlertSaveAs") and shown("btnAlertDownload"))
+    s = st()
+    check("the document is still unsaved, and says so", s["dirty"] and "unsaved" in s["chip"] and ev(ws, "window.__writes") == 0)
+    time.sleep(5.6)                                   # longer than a status message lasts
+    check("the alert does not fade", ev(ws, "document.getElementById('saveAlert').classList.contains('show')") is True)
+
+    ev(ws, "window.__handle.requestPermission = async () => 'granted'; window.__handle.createWritable = async () => { throw new Error('disk full'); }")
+    key(ws, "s", "KeyS", 83, meta=True)
+    wait_for(ws, "document.getElementById('saveAlertWhy').textContent.includes('disk full')", timeout=15, label="write failed")
+    check("a write that fails says why", st()["dirty"] is True)
+
+    ev(ws, "window.__handle.createWritable = async () => ({ write: async () => { window.__writes++; }, close: async () => {} })")
+    key(ws, "s", "KeyS", 83, meta=True)
+    wait_for(ws, "document.getElementById('statusMsg').textContent.includes('Saved')", timeout=30, label="saved")
+    s = st()
+    check("a save that works takes the alert away", ev(ws, "document.getElementById('saveAlert').classList.contains('show')") is False)
+    check("and the chip says when", re.match(r"^Saved \d", s["chip"]) is not None and not s["dirty"]
+          and ev(ws, "document.getElementById('saveChip').classList.contains('unsaved')") is False, repr(s["chip"]))
+    click(ws, "#toolRect")
+    drag(stage_point(ws, 0.8, 0.3), stage_point(ws, 0.9, 0.4))
+    esc()
+    s = st()
+    check("one change later it counts one, and remembers the save",
+          re.match(r"^1 unsaved change · last saved \d", s["chip"]) is not None, repr(s["chip"]))
+    undo()
+    s = st()
+    check("undoing back to the save is saved again", not s["dirty"] and s["chip"].startswith("Saved "), repr(s["chip"]))
+    undo()
+    check("undoing past it is not", st()["dirty"] is True and "1 unsaved change" in st()["chip"], repr(st()["chip"]))
+    redo()
+
+    # --- the new shapes survive a save and reopen, through the real app ---
+    trip = ev(ws, """(async () => {
+      const { state } = await import('./js/state.js'), tabs = await import('./js/tabs.js');
+      const pages = await import('./js/pages.js'), view = await import('./js/view.js');
+      const { buildPdfBytes } = await import('./js/export.js');
+      const was = state.pages[0].annotations.map((a) => a.type + (a.fill === false ? ':bare' : ''));
+      const bytes = await buildPdfBytes();
+      const doc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
+      const kinds = (await (await doc.getPage(1)).getAnnotations()).map((a) => a.subtype);
+      tabs.openDocument();
+      await pages.importPdfBytes(bytes.slice().buffer, 'surface-reopened.pdf');
+      await view.renderMainCanvas();
+      return { was, now: state.pages[0].annotations.map((a) => a.type + (a.fill === false ? ':bare' : '')), kinds,
+               dom: document.querySelectorAll('#leaderSvg .ink-hit').length + document.querySelectorAll('.anno-box').length,
+               hl: document.querySelectorAll('#hiliteSvg .ink-stroke').length, dirty: state.dirty };
+    })()""", awaitp=True)
+    time.sleep(0.6)
+    check("saved and reopened, every markup is still the markup it was", trip["was"] == trip["now"] and len(trip["was"]) >= 8,
+          f"{trip['was']} -> {trip['now']}")
+    check("each one a standard annotation to any other program",
+          {"FreeText", "Line", "Square", "Polygon", "Ink"} <= set(trip["kinds"]), str(trip["kinds"]))
+    check("and they are on screen to be edited", trip["dom"] == len(trip["now"]) and trip["hl"] == 1 and trip["dirty"] is False, str(trip))
+    shot(ws, "10-surface-reopened")
+
+    # --- a note still being typed when the document changes under it ---
+    click(ws, "#toolText")
+    tap(*stage_point(ws, 0.8, 0.3))
+    typed("Mid-thought")
+    key(ws, "t", "KeyT", 84, meta=True)                # a new tab, without leaving the note first
+    time.sleep(0.6)
+    after = ev(ws, """(async () => {
+      const { state } = await import('./js/state.js');
+      const { historyStatus } = await import('./js/history.js');
+      const old = state.docs.find((d) => d.docName === 'surface-reopened.pdf');
+      return { here: state.docName, pages: state.pages.length, dirty: state.dirty, canUndo: historyStatus().canUndo,
+               kept: old.pages[0].annotations.some((a) => a.text === 'Mid-thought'), oldDirty: old.dirty };
+    })()""", awaitp=True)
+    check("⌘T mid-note keeps what was typed, in the document it was typed in", after["kept"] and after["oldDirty"], str(after))
+    check("and leaves the new tab clean, with nothing of the old one to undo",
+          after["here"] == "Untitled.pdf" and after["pages"] == 0 and not after["dirty"] and not after["canUndo"], str(after))
 
 
 def tab_checks(ws):
@@ -1055,6 +1514,10 @@ def main():
         # ---------------------------------------------- 6. reorder
         print("\n=== reorder (pointer drag) ===")
         order0 = ev(ws, "[...document.querySelectorAll('#thumbList .thumb')].map(t=>t.dataset.pageId)")
+        # The page-edit buttons sit above the rail, so the third thumbnail
+        # starts below the fold; bring both ends of the drag into view.
+        ev(ws, "document.getElementById('sidebar').scrollTop = 220")
+        time.sleep(0.2)
         rects = ev(ws, """[...document.querySelectorAll('#thumbList .thumb')].map(t => {
           const r = t.getBoundingClientRect();
           return {x: r.left + r.width/2, y: r.top + r.height/2,
@@ -1186,12 +1649,12 @@ def main():
         key(ws, "Escape", "Escape", 27)
         check("Esc clears the active tool",
               ev(ws, "document.getElementById('toolText').classList.contains('toggled')") is False)
-        # Shortcuts must not fire while typing in the filename field.
-        ev(ws, "document.getElementById('filenameInput').focus()")
+        # Shortcuts must not fire while typing in the page-number field.
+        ev(ws, "document.getElementById('pageInput').focus()")
         key(ws, "q", "KeyQ", 81)
         check("Q is inert while typing in a text field",
               ev(ws, "document.getElementById('toolCallout').classList.contains('toggled')") is False)
-        ev(ws, "document.getElementById('filenameInput').blur()")
+        ev(ws, "document.getElementById('pageInput').blur()")
         click(ws, "#btnFitWidth")
         time.sleep(0.5)
 
@@ -1257,23 +1720,30 @@ def main():
 
         # ---------------------------------------------- 6c. pen
         print("\n=== pen ===")
-        TOOLBAR_H = ev(ws, "document.getElementById('pageToolbar').getBoundingClientRect().height")
-        # Always present: toggling this group reflows the toolbar, and that
-        # resize triggers a re-render that trips the known renderer race.
-        check("pen size presets are always in the toolbar",
-              ev(ws, "getComputedStyle(document.getElementById('penSizeGrp')).display") != "none")
+        # The line weights come and go with the tool. That is only safe
+        # because nothing below them moves when they do: a toolbar that
+        # grew resized the stage, and that resize triggered a re-render
+        # that tripped the known renderer race.
+        CHROME_BOX = """(() => {
+          const r = (id) => document.getElementById(id).getBoundingClientRect();
+          return [r('pageToolbar').height, r('propsRow').height, r('canvasStage').top, r('canvasStage').height].join();
+        })()"""
+        chrome_before = ev(ws, CHROME_BOX)
+        check("line weights are put away while nothing uses them",
+              ev(ws, "getComputedStyle(document.getElementById('penSizeGrp')).display") == "none")
         key(ws, "p", "KeyP", 80)
         check("P activates the pen",
               ev(ws, "document.getElementById('toolPen').classList.contains('toggled')") is True)
-        check("activating the pen does not reflow the toolbar",
-              ev(ws, "document.getElementById('pageToolbar').getBoundingClientRect().height") == TOOLBAR_H,
-              f"{ev(ws, 'document.getElementById(\'pageToolbar\').getBoundingClientRect().height')} vs {TOOLBAR_H}")
+        check("and brings out the line weights",
+              ev(ws, "getComputedStyle(document.getElementById('penSizeGrp')).display") != "none")
+        check("activating the pen moves nothing below the toolbar",
+              ev(ws, CHROME_BOX) == chrome_before, f"{ev(ws, CHROME_BOX)} vs {chrome_before}")
         check("three pen sizes offered",
               ev(ws, "document.querySelectorAll('#penSizeGrp .pen-dot').length") == 3,
               str(ev(ws, "document.querySelectorAll('#penSizeGrp .pen-dot').length")))
 
         # Blue, so the stroke is separable from the fixture's black text.
-        click(ws, "#colorGrp .swatch[title='#1f6feb']")
+        click(ws, "#colorGrp .swatch[data-color='#1f6feb']")
         click(ws, "#penSizeGrp .pen-dot:last-child")     # Bold
         time.sleep(0.3)
 
@@ -1304,7 +1774,7 @@ def main():
         check("dragging with the pen leaves a stroke", strokes == 1, f"{strokes} strokes")
         pcount = ev(ws, """(() => {
           const el = document.querySelector('#leaderSvg .ink-stroke');
-          return el ? el.getAttribute('points').trim().split(/\\s+/).length : 0;
+          return el ? (el.getAttribute('d').match(/[ML]/g) || []).length : 0;
         })()""")
         check("stroke followed the pointer", pcount >= 4, f"{pcount} points")
         check("stroke uses the selected colour",
@@ -1312,8 +1782,7 @@ def main():
               == "#1f6feb",
               ev(ws, "document.querySelector('#leaderSvg .ink-stroke').getAttribute('stroke')"))
 
-        # The pen must stay armed for a second stroke, unlike the one-shot
-        # text tools which revert to select after placing.
+        # The pen must stay armed for a second stroke, as every tool does.
         drag_stroke([(0.25, 0.65), (0.45, 0.78), (0.7, 0.65)])
         check("pen stays active for repeated strokes",
               ev(ws, "document.querySelectorAll('#leaderSvg .ink-stroke').length") == 2,
@@ -1348,7 +1817,7 @@ def main():
             const s = at(f);
             const hit = document.elementFromPoint(s.x, s.y);
             last = {x: s.x, y: s.y, hit: name(hit), f};
-            if (hit && (hit.getAttribute('class') || '').includes('ink-stroke')) return last;
+            if (hit && (hit.getAttribute('class') || '').includes('ink-hit')) return last;
           }
           return last;
         })()"""
@@ -1377,11 +1846,19 @@ def main():
         # and locating it on screen means trusting the stage scroll — which
         # is exactly what the open renderer race makes unreliable. So:
         # assert the CSS that makes it hittable, then drive the handler.
+        # What takes the pointer is the hit path — the same line, invisible
+        # and wider — not the hairline that is drawn.
         check("a finished stroke is hit-testable once the pen is put away",
-              ev(ws, "getComputedStyle(document.querySelector('#leaderSvg .ink-stroke')).pointerEvents")
+              ev(ws, "getComputedStyle(document.querySelector('#leaderSvg .ink-hit')).pointerEvents")
               == "stroke")
-        ev(ws, """document.querySelector('#leaderSvg .ink-stroke').dispatchEvent(
-             new PointerEvent('pointerdown', {bubbles: true, cancelable: true}))""")
+        check("by a path no narrower than a fingertip is kind to",
+              ev(ws, "parseFloat(getComputedStyle(document.querySelector('#leaderSvg .ink-hit')).strokeWidth)") >= 14,
+              str(ev(ws, "getComputedStyle(document.querySelector('#leaderSvg .ink-hit')).strokeWidth")))
+        ev(ws, """(() => {
+          document.querySelector('#leaderSvg .ink-hit').dispatchEvent(
+            new PointerEvent('pointerdown', {bubbles: true, cancelable: true, pointerId: 7}));
+          window.dispatchEvent(new PointerEvent('pointerup', {pointerId: 7}));
+        })()""")
         time.sleep(0.5)
         check("selecting a stroke shows its halo",
               ev(ws, "document.querySelectorAll('#leaderSvg .ink-halo').length") == 1)
@@ -1395,7 +1872,8 @@ def main():
 
         # ---------------------------------------------- 7. save
         print("\n=== save path ===")
-        ev(ws, "document.getElementById('filenameInput').value = 'smoke-out.pdf'")
+        # The save panel starts from the document's own name.
+        ev(ws, "(async()=>{const s=await import('./js/state.js'); s.state.docName='smoke-out.pdf';})()", awaitp=True)
         key(ws, "s", "KeyS", 83, meta=True, shift=True)   # Save As
         wait_for(ws, "document.getElementById('statusMsg').textContent.includes('Saved')",
                  timeout=30, label="shift-cmd-S completes")
@@ -1534,6 +2012,7 @@ def main():
         heavy_page_checks(ws3, plot=False)
         launch_checks(ws3)
         markup_checks(ws3)
+        surface_checks(ws3)
     except TimeoutError:
         failed += 1
         print("FAIL  the renderer stopped answering during the tab checks")

@@ -100,3 +100,10 @@ away. That grows with what the user actually opens rather than with every
 render, which is why it is logged rather than fixed — adding `destroy()`
 calls to the re-import and tab-close paths is real complexity in
 the load path for a leak nobody has hit.
+
+Undo makes this a little worse on purpose. A checkpoint keeps the page
+objects and source documents it refers to, so Clear All, or undoing a
+merge, no longer lets them go until the tab closes or 200 further steps
+push the checkpoint out. GPU plots are different — they are still swept
+when their document leaves the page list, and recompiled if undo brings
+it back.

@@ -23,51 +23,84 @@
       <span class="sub">pdf markup</span>
     </div>
 
+    <div class="divider"></div>
+
     <div class="doc-id">
-      <span id="dirtyDot" class="dirty-dot" title="Unsaved changes" style="display:none"></span>
       <span id="docTitle">Untitled.pdf</span>
+      <!-- Documents close with the app, so whether this one is saved is
+           the most important thing on screen. It is said in words. -->
+      <span id="saveChip" class="save-chip" hidden>
+        <span id="dirtyDot" class="dirty-dot" style="display:none"></span>
+        <span id="saveChipText"></span>
+      </span>
     </div>
-
-    <div class="divider"></div>
-
-    <div class="hdr-group">
-      <button id="btnOpen" title="Open one or more PDFs, merged into this document (⌘O)">Open</button>
-      <button id="btnOpenTabs" title="Open each PDF in its own tab (⇧⌘O)">Open in Tabs…</button>
-      <button id="btnSave" class="primary" title="Save over the file you opened (⌘S). Markups stay editable.">Save</button>
-      <button id="btnSaveAs" title="Save to a new file (⇧⌘S). Markups stay editable.">Save As…</button>
-      <button id="btnDownload" class="primary" title="Download the edited PDF. Markups stay editable.">⬇ Download</button>
-      <button id="btnFlatten" title="Save a copy with the markups made permanent — in that copy they can no longer be edited or deleted">Flatten…</button>
-    </div>
-
-    <div class="divider"></div>
-
-    <div class="hdr-group">
-      <button id="btnAddBlank" title="Insert a blank page after the current page">＋ Blank</button>
-      <select id="blankSizeSelect" title="Blank page size" aria-label="Blank page size">
-        <option value="Letter">Letter</option>
-        <option value="Legal">Legal</option>
-        <option value="A4">A4</option>
-        <option value="Tabloid">Tabloid</option>
-      </select>
-      <input type="text" id="filenameInput" value="document.pdf" title="Filename used when downloading or saving as" aria-label="Output filename">
-    </div>
-
-    <div class="divider"></div>
-    <button id="btnClearAll" class="danger-ghost" title="Remove all pages and start over">Clear All</button>
 
     <div id="statusMsg" role="status" aria-live="polite"></div>
+
+    <div class="hdr-group hdr-actions">
+      <button id="btnUndo" disabled title="Undo (⌘Z)"><svg class="ic" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M3 7h6a2.5 2.5 0 010 5H6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path><path d="M5.5 4.5L3 7l2.5 2.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Undo</span></button>
+      <button id="btnRedo" class="icon-only" disabled title="Redo (⇧⌘Z)" aria-label="Redo"><svg class="ic" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M11 7H5a2.5 2.5 0 000 5h3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path><path d="M8.5 4.5L11 7l-2.5 2.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+      <div class="divider"></div>
+      <!-- One primary action. Every other file command is behind the
+           chevron, the rare and the destructive ones last. -->
+      <div class="split">
+        <button id="btnSave" class="primary" title="Save over the file you opened (⌘S). Markups stay editable.">Save</button>
+        <button id="btnFileMenu" class="primary" aria-haspopup="menu" aria-expanded="false" aria-controls="fileMenu" aria-label="More file commands" title="More file commands"><svg class="ic" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M2 3.5L5 6.5l3-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+        <div id="fileMenu" class="menu" role="menu" hidden>
+          <button id="btnSaveAs" role="menuitem" title="Save to a new file. Markups stay editable.">Save As… <kbd>⇧⌘S</kbd></button>
+          <button id="btnDownload" role="menuitem" title="Download the edited PDF. Markups stay editable.">Download a copy</button>
+          <button id="btnFlatten" role="menuitem" title="Save a copy with the markups made permanent — in that copy they can no longer be edited or deleted">Save Flattened Copy…</button>
+          <div class="menu-sep" role="separator"></div>
+          <button id="btnOpen" role="menuitem" title="Open one or more PDFs, merged into this document">Open… <kbd>⌘O</kbd></button>
+          <button id="btnOpenTabs" role="menuitem" title="Open each PDF in its own tab">Open in Tabs… <kbd>⇧⌘O</kbd></button>
+          <div class="menu-sep" role="separator"></div>
+          <button id="btnShortcuts" role="menuitem">Keyboard shortcuts <kbd>?</kbd></button>
+          <div class="menu-sep" role="separator"></div>
+          <button id="btnClearAll" role="menuitem" class="danger-ghost" title="Remove every page from this document (⌘Z brings them back)">Clear All</button>
+        </div>
+      </div>
+    </div>
   </header>
 
   <div id="tabBar">
     <div id="tabStrip"></div>
-    <button id="btnNewTab" title="New empty document (⌘T)" aria-label="New document">+</button>
+    <button id="btnNewTab" title="New empty document (⌘T)" aria-label="New document"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 6h6M6 3v6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
   </div>
 
   <div id="body">
-    <aside id="sidebar">
+    <!-- A save that did not happen stays here until it is dealt with. -->
+    <div id="saveAlert" role="alert">
+      <div class="alert-text">
+        <strong>Nothing was written. Your markups are still open.</strong>
+        <span id="saveAlertWhy"></span>
+      </div>
+      <button id="btnAlertSaveAs">Save As…</button>
+      <button id="btnAlertDownload">Download a copy</button>
+      <button id="btnAlertDismiss" class="icon-only" aria-label="Dismiss" title="Dismiss"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+    </div>
+
+    <aside id="sidebar" aria-label="Pages">
       <div class="sidebar-head">
         <span class="sidebar-title">Pages</span>
         <span id="pageCountLabel" class="sidebar-count"></span>
+      </div>
+      <!-- These change the document, not the view: a turned page is saved
+           turned. They live with the pages for that reason. -->
+      <div class="page-edits" role="group" aria-label="Edit the document's pages">
+        <div class="page-edits-row">
+          <button id="btnAddBlank" title="Insert a blank page after the current page"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 6h6M6 3v6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg><span>Blank page</span></button>
+          <select id="blankSizeSelect" title="Blank page size" aria-label="Blank page size">
+            <option value="Letter">Letter</option>
+            <option value="Legal">Legal</option>
+            <option value="A4">A4</option>
+            <option value="Tabloid">Tabloid</option>
+          </select>
+        </div>
+        <div class="page-edits-row">
+          <button id="btnRotateCCW" class="icon-only" title="Rotate this page in the document, counter-clockwise — saved with the file" aria-label="Rotate this page counter-clockwise in the document"><svg class="ic" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M3.2 7.5a4.3 4.3 0 108-2.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M3 3.2v3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+          <button id="btnRotateCW" class="icon-only" title="Rotate this page in the document, clockwise — saved with the file" aria-label="Rotate this page clockwise in the document"><svg class="ic" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M10.8 7.5a4.3 4.3 0 11-8-2.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M11 3.2v3h-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+          <button id="btnDeletePage" class="danger-ghost" title="Delete this page from the document (⌘Z brings it back)">Delete page</button>
+        </div>
       </div>
       <div id="thumbList"></div>
       <div class="empty-hint" id="sidebarEmptyHint">
@@ -79,56 +112,86 @@
     <div id="editorArea">
       <div id="pageToolbar">
         <div class="grp mobile-only">
-          <button id="btnPages" aria-expanded="false" title="Show page thumbnails">☰ Pages</button>
+          <button id="btnPages" aria-expanded="false" title="Show page thumbnails"><svg class="ic" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><rect x="2.2" y="2.2" width="6.6" height="8.6" rx="1" stroke="currentColor" stroke-width="1.4"></rect><path d="M5.2 11.8h5.6a1 1 0 001-1V5.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Pages</span></button>
         </div>
-        <div class="grp">
-          <button id="btnRotateCCW" class="icon-only" title="Rotate page counter-clockwise" aria-label="Rotate counter-clockwise">⟲</button>
-          <button id="btnRotateCW" class="icon-only" title="Rotate page clockwise" aria-label="Rotate clockwise">⟳</button>
-          <button id="btnDeletePage" class="danger-ghost" title="Delete this page">Delete Page</button>
+        <div class="grp tools" role="toolbar" aria-label="Markup tools">
+          <button id="toolSelect" aria-pressed="false" title="Select, move and edit markups; drag the sheet to pan (V or Esc)"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M3.5 2.5l8 4.2-3.4 1-1.3 3.4-3.3-8.6z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Select</span></button>
+          <button id="toolText" aria-pressed="false" title="Text box: click to drop one, or drag to set its width (T)"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><rect x="2.2" y="3.2" width="10.6" height="8.6" rx="1.2" stroke="currentColor" stroke-width="1.5"></rect><path d="M5 6.3h5M5 8.8h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Text</span></button>
+          <button id="toolCallout" aria-pressed="false" title="Callout: click what you are pointing at, then where the note goes (Q)"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><rect x="6" y="2.6" width="6.8" height="5.4" rx="1" stroke="currentColor" stroke-width="1.5"></rect><path d="M6 6.5L2.3 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="2.3" cy="12" r="1.3" fill="currentColor"></circle></svg><span class="lbl">Callout</span></button>
+          <button id="toolPen" aria-pressed="false" title="Draw freehand (P)"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M2.5 12.5l1-3L10 3a1.5 1.5 0 012.1 2.1L5.5 11.5l-3 1z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Pen</span></button>
+          <button id="toolHighlight" aria-pressed="false" title="Highlighter: a broad see-through stroke (H)"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M3 9.5l4.5-4.5 2.5 2.5L5.5 12H3V9.5z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M2.5 13.5h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Highlight</span></button>
+          <button id="toolArrow" aria-pressed="false" title="Arrow: drag from tail to tip (A)"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M3 12L12 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.5 3H12v4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Arrow</span></button>
+          <button id="toolRect" aria-pressed="false" title="Box: drag from corner to corner (R)"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><rect x="2.6" y="3.4" width="9.8" height="8.2" rx="1" stroke="currentColor" stroke-width="1.5"></rect></svg><span class="lbl">Box</span></button>
+          <button id="toolCloud" aria-pressed="false" title="Revision cloud: drag from corner to corner (C)"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M3 9.5a1.6 1.6 0 010-3.2 2 2 0 013.3-1.5 2 2 0 013.4.6 1.8 1.8 0 01.3 3.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M2.8 9.5h8.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Cloud</span></button>
         </div>
-        <div class="grp">
-          <button id="toolText" title="Drop a text box on the page (T)">Text Box</button>
-          <button id="toolCallout" title="Point at something, then place the note (Q)">Text + Leader</button>
-          <button id="toolPen" title="Draw freehand on the page (P)">✏ Pen</button>
+        <div class="grp rail-right">
+          <button id="btnMarkups" aria-expanded="false" aria-controls="markupRail" title="List every markup in this document"><svg class="ic" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M2.5 3.5h9M2.5 7h9M2.5 10.5h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Markups</span><span id="markupCount" class="count">0</span></button>
+          <div class="divider"></div>
+          <button id="btnPrevPage" class="icon-only" title="Previous page (←)" aria-label="Previous page"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M7.5 2L4 6l3.5 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+          <span class="page-box">
+            <label for="pageInput" class="sr-only">Page number</label>
+            <input id="pageInput" type="text" inputmode="numeric" autocomplete="off" value="" title="Type a page number and press Return">
+            <span id="pageTotal">/ 0</span>
+          </span>
+          <button id="btnNextPage" class="icon-only" title="Next page (→)" aria-label="Next page"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 2L8 6l-3.5 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+          <div class="divider"></div>
+          <button id="btnZoomOut" class="icon-only" title="Zoom out (⌘−)" aria-label="Zoom out"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 6h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+          <button id="zoomReadout" class="readout" title="Reset to 100%">100%</button>
+          <button id="btnZoomIn" class="icon-only" title="Zoom in (⌘+)" aria-label="Zoom in"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 6h6M6 3v6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+          <button id="btnFitWidth" title="Fit width (⌘0) — scroll to zoom, ⌃scroll to scroll">Fit W</button>
+          <button id="btnFitPage" title="Fit page (⌘9) — scroll to change page, ⌃scroll to zoom">Fit Pg</button>
         </div>
-        <div class="grp pen-size-grp" id="penSizeGrp">
-          <label aria-hidden="true">Pen</label>
-        </div>
-        <div class="grp">
+      </div>
+
+      <!-- What can be styled right now: the selected markup, or the next
+           one the armed tool will make. Its height never changes, so
+           nothing below it moves when a tool is picked. -->
+      <div id="propsRow">
+        <span id="propsLabel">Select</span>
+        <span id="propsNone" class="props-hint">Pick a tool, or click a markup on the sheet to edit it.</span>
+        <div class="grp" id="fontSizeGrp" hidden>
           <label for="fontSizeSelect">Size</label>
-          <select id="fontSizeSelect" aria-label="Font size">
+          <select id="fontSizeSelect" aria-label="Text size">
             <option>9</option><option>10</option><option>12</option>
             <option>14</option><option>18</option><option>24</option>
           </select>
         </div>
-        <div class="grp" id="colorGrp">
-          <label aria-hidden="true">Color</label>
+        <div class="grp pen-size-grp" id="penSizeGrp" role="group" aria-label="Line weight" hidden>
+          <span class="grp-label" aria-hidden="true">Weight</span>
         </div>
-        <div class="grp">
-          <button id="btnDeleteAnno" class="danger-ghost" disabled title="Delete the selected note">Delete Note</button>
+        <div class="grp" id="colorGrp" role="group" aria-label="Colour" hidden>
+          <span class="grp-label" aria-hidden="true">Colour</span>
         </div>
-        <div class="grp zoom-grp">
-          <button id="btnZoomOut" class="icon-only" title="Zoom out (⌘−)" aria-label="Zoom out">−</button>
-          <button id="zoomReadout" class="readout" title="Reset to 100%">100%</button>
-          <button id="btnZoomIn" class="icon-only" title="Zoom in (⌘+)" aria-label="Zoom in">＋</button>
-          <button id="btnFitWidth" title="Fit width (⌘0) — scroll to zoom, ⌃scroll to scroll">Fit W</button>
-          <button id="btnFitPage" title="Fit page (⌘9) — scroll to change page, ⌃scroll to zoom">Fit Pg</button>
-        </div>
+        <label class="check-chip" id="fillGrp" hidden>
+          <input type="checkbox" id="fillToggle" checked>
+          <span>White fill behind text</span>
+        </label>
+        <button id="btnDuplicate" hidden title="Make a second copy of the selected markup (⌘D)">Duplicate <kbd>⌘D</kbd></button>
+        <button id="btnDeleteAnno" class="danger-ghost" hidden disabled title="Delete the selected markup (Delete)">Delete</button>
+        <span id="armedNote" class="armed" hidden>
+          <span class="k">Armed</span>
+          <span>place as many as you like — <kbd>Esc</kbd> puts it away</span>
+        </span>
       </div>
 
       <div id="canvasStage">
         <div id="emptyState">
           <h2>DRAWING SHEET — BLANK</h2>
           <p>
-            Open a PDF, drag one onto this window, or add a blank page from the toolbar.<br>
+            Open a PDF, drag one onto this window, or add a blank page.<br>
             Everything happens on this device — nothing is uploaded anywhere.
           </p>
+          <p><button id="btnEmptyOpen" class="primary">Open a PDF…</button></p>
+          <!-- The one caveat that applies to this browser, said before it
+               is met as a failure (chrome.js). -->
+          <p id="platformNote"></p>
           <p id="emptyStamp"></p>
         </div>
         <div id="pageStack" style="display:none;">
           <canvas id="pageCanvas"></canvas>
           <canvas id="plotCanvas"></canvas>
           <div id="annoLayer">
+            <svg id="hiliteSvg" aria-hidden="true"></svg>
             <svg id="leaderSvg" aria-hidden="true"></svg>
           </div>
         </div>
@@ -142,9 +205,21 @@
              shows an older line than this file does, the installed app is
              still serving a cached copy. tests/analyze.py checks the two
              numbers agree. -->
-        <span id="buildStamp">rev 19 · 2026-10-10 · closing asks first if any tab has unsaved work</span>
+        <span id="buildStamp">rev 20 · 2026-10-10 · undo, tools that stay armed, highlight / arrow / box / cloud, one Save</span>
       </div>
     </div>
+
+    <aside id="markupRail" aria-label="Markups" hidden>
+      <div class="sidebar-head">
+        <span class="sidebar-title">Markups</span>
+        <span id="markupRailCount" class="sidebar-count"></span>
+        <button id="btnCloseMarkups" class="icon-only" aria-label="Close the markups list" title="Close"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+      </div>
+      <div id="markupList"></div>
+      <div class="empty-hint" id="markupEmptyHint">
+        No markups yet. Everything you add to any page is listed here; click one to go to it.
+      </div>
+    </aside>
   </div>
 </div>
 
@@ -158,6 +233,60 @@
   A new version of Redline is available.
   <button id="btnReload">Reload</button>
 </div>
+
+<dialog id="shortcutsDialog" aria-labelledby="shortcutsTitle">
+  <div class="dialog-head">
+    <h2 id="shortcutsTitle">Keyboard shortcuts</h2>
+    <button id="btnCloseShortcuts" class="icon-only" aria-label="Close" title="Close"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+  </div>
+  <div class="shortcut-grid">
+      <section>
+        <h3>Files</h3>
+        <dl>
+          <div><dt><kbd>⌘S</kbd></dt><dd>Save</dd></div>
+          <div><dt><kbd>⇧⌘S</kbd></dt><dd>Save As</dd></div>
+          <div><dt><kbd>⌘O</kbd></dt><dd>Open into this document</dd></div>
+          <div><dt><kbd>⇧⌘O</kbd></dt><dd>Open each file in its own tab</dd></div>
+          <div><dt><kbd>⌘T</kbd></dt><dd>New tab</dd></div>
+        </dl>
+      </section>
+      <section>
+        <h3>Editing</h3>
+        <dl>
+          <div><dt><kbd>⌘Z</kbd></dt><dd>Undo</dd></div>
+          <div><dt><kbd>⇧⌘Z</kbd></dt><dd>Redo</dd></div>
+          <div><dt><kbd>⌘D</kbd></dt><dd>Duplicate the selected markup</dd></div>
+          <div><dt><kbd>⌘C / ⌘V</kbd></dt><dd>Copy the selected markup / paste it on this page</dd></div>
+          <div><dt><kbd>Delete</kbd></dt><dd>Delete the selected markup</dd></div>
+          <div><dt><kbd>Esc</kbd></dt><dd>Put the tool away, deselect</dd></div>
+        </dl>
+      </section>
+      <section>
+        <h3>Tools</h3>
+        <dl>
+          <div><dt><kbd>V</kbd></dt><dd>Select</dd></div>
+          <div><dt><kbd>T</kbd></dt><dd>Text box</dd></div>
+          <div><dt><kbd>Q</kbd></dt><dd>Callout</dd></div>
+          <div><dt><kbd>P</kbd></dt><dd>Pen</dd></div>
+          <div><dt><kbd>H</kbd></dt><dd>Highlight</dd></div>
+          <div><dt><kbd>A</kbd></dt><dd>Arrow</dd></div>
+          <div><dt><kbd>R</kbd></dt><dd>Box</dd></div>
+          <div><dt><kbd>C</kbd></dt><dd>Revision cloud</dd></div>
+        </dl>
+      </section>
+      <section>
+        <h3>View</h3>
+        <dl>
+          <div><dt><kbd>⌘+ / ⌘−</kbd></dt><dd>Zoom in / out</dd></div>
+          <div><dt><kbd>⌘0 / ⌘9</kbd></dt><dd>Fit width / fit page</dd></div>
+          <div><dt><kbd>← → ↑ ↓</kbd></dt><dd>Previous / next page</dd></div>
+          <div><dt><kbd>Space + drag</kbd></dt><dd>Pan without leaving the tool</dd></div>
+          <div><dt><kbd>double-click</kbd></dt><dd>Latch the wheel into zoom</dd></div>
+          <div><dt><kbd>?</kbd></dt><dd>This list</dd></div>
+        </dl>
+      </section>
+  </div>
+</dialog>
 
 <input type="file" id="fileInput" accept="application/pdf,.pdf" multiple hidden>
 

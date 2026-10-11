@@ -40,7 +40,7 @@ ALLOWED_CYCLES = [frozenset({"view.js", "annots.js"})]
 APP_WIDE_STATE = {
     "docs", "activeDocId", "nextDocId",
     "activeTool", "spaceHeld", "wheelZoom", "pendingCalloutTip",
-    "currentColor", "currentFontSize", "currentPenSize",
+    "currentColor", "currentHighlightColor", "currentFontSize", "currentPenSize", "currentFill",
     "zoomMode", "lastFitMode", "zoomLevel", "currentScale",
     "domRefs",
 }

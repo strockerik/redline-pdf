@@ -183,5 +183,27 @@ for (const R0 of [0, 90, 180, 270]) {
   check(`ink CW then CCW is identity at R=${R0}`, undone);
 }
 
+// --- 8. Every point shape takes the same branch as ink ---
+// A highlight is a path; an arrow, a box and a cloud are two points. None
+// has a box of text, so all of them must go the way ink goes — a shape
+// that fell through to the note branch would come out as NaN.
+for (const type of ['highlight', 'arrow', 'rect', 'cloud']) {
+  const page = {
+    W0: 612, H0: 792, rotation: 0,
+    annotations: [{ id: 1, type, color: '#000', size: 2.5, points: [{ x: 100, y: 120 }, { x: 260, y: 150 }] }],
+  };
+  const orig = JSON.parse(JSON.stringify(page.annotations[0].points));
+  remapAnnotationsForRotation(page, 0, 90);
+  const mid = page.annotations[0].points;
+  const { w: Wv, h: Hv } = visualSize(90, page.W0, page.H0);
+  check(`${type} turns with the page`, mid.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y)
+    && p.x >= 0 && p.y >= 0 && p.x <= Wv && p.y <= Hv) && !near(mid[0].x, orig[0].x),
+    JSON.stringify(mid));
+  let R = 90;
+  for (let i = 0; i < 3; i++) { remapAnnotationsForRotation(page, R, normRot(R + 90)); R = normRot(R + 90); }
+  check(`${type} returns to start after 4 rotations`,
+    page.annotations[0].points.every((p, i) => near(p.x, orig[i].x, 1e-9) && near(p.y, orig[i].y, 1e-9)));
+}
+
 print(failures ? `\n${failures} FAILURE(S)` : '\nAll rotate-remap checks passed');
 if (failures) throw new Error('rotate-remap checks failed');

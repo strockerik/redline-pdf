@@ -7,6 +7,7 @@
  * the File System Access API nor file handlers.
  */
 import { state, setStatus, markDirty } from './state.js';
+import { noteClean } from './history.js';
 import { importPdfBytes, importPdfFile } from './pages.js';
 import { docForNewFile, renderTabs } from './tabs.js';
 import { buildPdfBytes } from './export.js';
@@ -24,21 +25,13 @@ const PDF_PICKER_TYPES = [{
 // ============================================================
 /** Open from a FileSystemFileHandle — the Finder / picker path. The
  *  handle is retained so ⌘S can write straight back to it. */
-async function openFromHandle(handle, { asPrimary = true } = {}) {
+async function openFromHandle(handle) {
   const file = await handle.getFile();
   const bytes = await file.arrayBuffer();
-  const first = await importPdfBytes(bytes, file.name);
-  // `combined` is set by the import above the moment a second file lands,
-  // and must not be undone here — this runs once per handle in a
-  // multi-select, so without the guard the second file would re-adopt a
-  // save target for a document that no longer has one.
-  if (first !== null && asPrimary && !state.fileHandle && !state.combined) {
-    state.fileHandle = handle;
-    state.docName = file.name;
-    markDirty(false);
-    updateTitle();
-  }
-  return first;
+  // Whether the handle becomes the save target is the import's call: it
+  // is the one place that knows if this file opened an empty document or
+  // was merged into a document that already had pages (pages.js).
+  return importPdfBytes(bytes, file.name, { handle });
 }
 
 /** Wire up the Chrome file handler. When Redline is the app that opened
@@ -247,6 +240,29 @@ async function writeToHandle(handle, bytes) {
   }
 }
 
+// A save that did not happen is the one message that must not fade. It
+// stays until it is dismissed or a save succeeds, says that the work is
+// still here, and offers the two ways out (wired in chrome.js).
+function saveFailed(what) {
+  setStatus('');
+  const alert = document.getElementById('saveAlert');
+  if (!alert) { setStatus(what, 'err'); return; }
+  document.getElementById('saveAlertWhy').textContent = what;
+  alert.classList.add('show');
+}
+
+export function dismissSaveAlert() {
+  document.getElementById('saveAlert')?.classList.remove('show');
+}
+
+/** The document on screen is now exactly what is on disk. */
+function saved() {
+  dismissSaveAlert();
+  noteClean({ saved: true });
+  markDirty(false);
+  updateTitle();
+}
+
 /** ⌘S — overwrite the file we opened, or fall through to Save As. */
 export async function save() {
   if (!state.pages.length) { setStatus('Nothing to save yet.', 'err'); return; }
@@ -257,17 +273,16 @@ export async function save() {
     // Permission must be requested while the user gesture is still
     // live, so it happens before the (slower) export.
     if (!await ensureWritePermission(state.fileHandle)) {
-      setStatus('Permission to write that file was declined.', 'err');
+      saveFailed(`Permission to write ${state.docName} was declined.`);
       return;
     }
     const bytes = await buildPdfBytes();
     await writeToHandle(state.fileHandle, bytes);
-    markDirty(false);
-    updateTitle();
+    saved();
     setStatus(`Saved ${state.docName} ✓`, 'ok');
   } catch (err) {
     console.error(err);
-    setStatus('Save failed: ' + (err.message || err), 'err');
+    saveFailed(`Couldn’t save ${state.docName}: ${err.message || err}`);
   }
 }
 
@@ -275,9 +290,9 @@ export async function save() {
 export async function saveAs() {
   if (!state.pages.length) { setStatus('Nothing to save yet.', 'err'); return; }
 
-  const suggested = ensurePdfExt(
-    document.getElementById('filenameInput')?.value || state.docName
-  );
+  // The save panel is where a name is chosen; it starts from the
+  // document's own.
+  const suggested = ensurePdfExt(state.docName);
 
   if (!canUseFileSystemAccess) {
     setStatus('Building PDF…');
@@ -285,12 +300,11 @@ export async function saveAs() {
       const bytes = await buildPdfBytes();
       downloadBytes(bytes, suggested);
       state.docName = suggested;
-      markDirty(false);
-      updateTitle();
+      saved();
       setStatus('Downloaded ✓', 'ok');
     } catch (err) {
       console.error(err);
-      setStatus('Export failed: ' + (err.message || err), 'err');
+      saveFailed(`Couldn’t build the PDF: ${err.message || err}`);
     }
     return;
   }
@@ -305,13 +319,12 @@ export async function saveAs() {
     await writeToHandle(handle, bytes);
     state.fileHandle = handle;
     state.docName = handle.name || suggested;
-    markDirty(false);
-    updateTitle();
+    saved();
     setStatus(`Saved ${state.docName} ✓`, 'ok');
   } catch (err) {
-    if (err.name === 'AbortError') return;   // user dismissed the panel
+    if (err.name === 'AbortError') { setStatus(''); return; }   // user dismissed the panel
     console.error(err);
-    setStatus('Save failed: ' + (err.message || err), 'err');
+    saveFailed(`Couldn’t save: ${err.message || err}`);
   }
 }
 
@@ -322,8 +335,8 @@ export async function saveAs() {
  *  that loses the editable version. */
 export async function saveFlattenedCopy() {
   if (!state.pages.length) { setStatus('Nothing to flatten yet.', 'err'); return; }
-  // Named after whatever Save As would call it, so the two sit together.
-  const name = ensurePdfExt(document.getElementById('filenameInput')?.value || state.docName);
+  // Named after the document, so the two sit together.
+  const name = ensurePdfExt(state.docName);
   const suggested = `${name.replace(/\.pdf$/i, '')} - flattened.pdf`;
 
   if (!canUseFileSystemAccess) {
@@ -333,7 +346,7 @@ export async function saveFlattenedCopy() {
       setStatus('Downloaded a flattened copy ✓', 'ok');
     } catch (err) {
       console.error(err);
-      setStatus('Export failed: ' + (err.message || err), 'err');
+      saveFailed(`Couldn’t build the flattened copy: ${err.message || err}`);
     }
     return;
   }
@@ -344,9 +357,9 @@ export async function saveFlattenedCopy() {
     await writeToHandle(handle, await buildPdfBytes({ flatten: true }));
     setStatus(`Saved a flattened copy as ${handle.name || suggested} ✓`, 'ok');
   } catch (err) {
-    if (err.name === 'AbortError') return;   // user dismissed the panel
+    if (err.name === 'AbortError') { setStatus(''); return; }   // user dismissed the panel
     console.error(err);
-    setStatus('Save failed: ' + (err.message || err), 'err');
+    saveFailed(`Couldn’t save the flattened copy: ${err.message || err}`);
   }
 }
 
@@ -357,12 +370,10 @@ export async function downloadCopy() {
   setStatus('Building PDF…');
   try {
     const bytes = await buildPdfBytes();
-    downloadBytes(bytes, ensurePdfExt(
-      document.getElementById('filenameInput')?.value || state.docName
-    ));
-    setStatus('Downloaded ✓', 'ok');
+    downloadBytes(bytes, ensurePdfExt(state.docName));
+    setStatus('Downloaded a copy ✓', 'ok');
   } catch (err) {
     console.error(err);
-    setStatus('Export failed: ' + (err.message || err), 'err');
+    saveFailed(`Couldn’t build the PDF: ${err.message || err}`);
   }
 }

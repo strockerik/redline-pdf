@@ -217,5 +217,41 @@ for (const R of [0, 90, 180, 270]) {
   check('empty ink draws nothing', page.calls.lines.length === 0);
 }
 
+// --- Point shapes: the lines the editor and the exporter both stroke ---
+{
+  const { shapePolylines, sizeForType, PEN_SIZES } = await import(`${APP}/state.js`);
+  const closed = (line) => near(line[0].x, line.at(-1).x) && near(line[0].y, line.at(-1).y);
+
+  const arrow = shapePolylines({ type: 'arrow', size: 2.5, points: [{ x: 100, y: 300 }, { x: 240, y: 220 }] });
+  check('an arrow is a shaft and a head', arrow.length === 2 && arrow[0].length === 2 && arrow[1].length === 3);
+  check('the head is at the tip, not the tail', near(arrow[1][1].x, 240) && near(arrow[1][1].y, 220));
+  const back = (w) => (w.x - 240) * (100 - 240) + (w.y - 220) * (300 - 220);
+  check('and its wings sweep back toward the tail', back(arrow[1][0]) > 0 && back(arrow[1][2]) > 0);
+  const big = shapePolylines({ type: 'arrow', size: 5, points: [{ x: 0, y: 0 }, { x: 100, y: 0 }] })[1];
+  const small = shapePolylines({ type: 'arrow', size: 1.2, points: [{ x: 0, y: 0 }, { x: 100, y: 0 }] })[1];
+  check('a heavier arrow gets a bigger head', Math.hypot(big[0].x - 100, big[0].y) > Math.hypot(small[0].x - 100, small[0].y));
+
+  // Dragged from any corner to its opposite, a box is the same box.
+  const boxA = shapePolylines({ type: 'rect', size: 2, points: [{ x: 300, y: 400 }, { x: 420, y: 470 }] })[0];
+  const boxB = shapePolylines({ type: 'rect', size: 2, points: [{ x: 420, y: 400 }, { x: 300, y: 470 }] })[0];
+  check('a box is a closed four-sided path', boxA.length === 5 && closed(boxA));
+  check('whichever corners it was dragged between', JSON.stringify(boxA) === JSON.stringify(boxB));
+
+  const cloud = shapePolylines({ type: 'cloud', size: 2, points: [{ x: 80, y: 500 }, { x: 260, y: 600 }] })[0];
+  check('a cloud is one closed path', closed(cloud) && cloud.length > 40, `${cloud.length} points`);
+  check('made of finite points', cloud.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y)));
+  // Every scallop bulges outward: nothing dips inside the rectangle it
+  // was drawn around, and the bulge is a modest fraction of a scallop.
+  const inside = cloud.filter((p) => p.x > 80.01 && p.x < 259.99 && p.y > 500.01 && p.y < 599.99);
+  const reach = Math.max(...cloud.map((p) => Math.max(80 - p.x, p.x - 260, 500 - p.y, p.y - 600)));
+  check('whose scallops all bulge outward', inside.length === 0, `${inside.length} points inside`);
+  check('by a few points, not a wild amount', reach > 2 && reach < 12, `reach ${reach.toFixed(2)}`);
+  const sliver = shapePolylines({ type: 'cloud', size: 2, points: [{ x: 10, y: 10 }, { x: 10, y: 60 }] })[0];
+  check('a cloud with no width is still finite', sliver.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y)));
+
+  check('a highlighter is far broader than a pen at the same preset',
+    PEN_SIZES.every((p) => sizeForType('highlight', p.width) > p.width * 3 && sizeForType('ink', p.width) === p.width));
+}
+
 print(failures ? `\n${failures} FAILURE(S)` : '\nAll geometry checks passed');
 if (failures) throw new Error('geometry checks failed');

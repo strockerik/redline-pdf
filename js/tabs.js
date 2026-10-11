@@ -6,7 +6,7 @@
  * re-render, and the rest of the app never learns that tabs exist.
  */
 import {
-  state, blankDoc, captureActiveDoc, loadDocIntoState, activeDoc, markDirty,
+  state, blankDoc, captureActiveDoc, loadDocIntoState, activeDoc, markDirty, finishTyping,
 } from './state.js';
 import {
   renderThumbnails, renderMainCanvas, updateTitle, invalidateAllThumbs,
@@ -31,6 +31,7 @@ export function ensureInitialDoc() {
 
 /** Add a document and make it active. */
 export function openDocument({ activate = true } = {}) {
+  finishTyping();
   captureActiveDoc();
   const doc = blankDoc();
   state.docs.push(doc);
@@ -52,6 +53,7 @@ function switchToDoc(id) {
   if (id === state.activeDocId) return;
   const target = state.docs.find((d) => d.id === id);
   if (!target) return;
+  finishTyping();
   captureActiveDoc();
   loadDocIntoState(target);
 
@@ -66,6 +68,7 @@ function switchToDoc(id) {
 function closeDoc(id) {
   const idx = state.docs.findIndex((d) => d.id === id);
   if (idx < 0) return;
+  finishTyping();
   const doc = state.docs[idx];
   const isActive = id === state.activeDocId;
   const dirty = isActive ? state.dirty : doc.dirty;

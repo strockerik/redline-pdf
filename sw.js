@@ -4,7 +4,7 @@
  * code is the classic PWA failure; the version bump plus the
  * delete-everything-else pass in `activate` is what prevents it.
  */
-const CACHE = 'redline-v19';
+const CACHE = 'redline-v20';
 
 const PRECACHE = [
   './',
@@ -19,6 +19,8 @@ const PRECACHE = [
   './js/view.js',
   './js/annots.js',
   './js/tabs.js',
+  './js/history.js',
+  './js/chrome.js',
   './js/export.js',
   './js/plot.js',
   './js/plotcompile.js',

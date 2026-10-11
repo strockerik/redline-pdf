@@ -1,21 +1,21 @@
 /* Bootstrap: wire the DOM to the modules and boot the app. */
-import {
-  state, COLORS, PEN_SIZES, resetDocument,
-  setStatus, onDirtyChange,
-} from './state.js';
+import { state, setStatus, onDirtyChange } from './state.js';
 import {
   renderThumbnails, renderMainCanvas, updateToolbarState, updateTitle,
-  installStageGestures, installThumbReorder, invalidateAllThumbs,
+  installStageGestures, installThumbReorder,
   setZoomMode, zoomStep, setZoomLevel, setWheelZoom, isTypingTarget,
 } from './view.js';
 import {
   importPdfFile, addBlankPage, deletePage, rotatePage, reorderPage,
-  selectPage, clearAll,
+  selectPage, stepPage, clearAll,
 } from './pages.js';
 import {
   setActiveTool, handleLayerClick, deleteAnnotation, deselectAnnotation,
-  applyAnnoStyle, installPenDrawing,
+  installDrawing, duplicateSelected, copySelected, pasteMarkup,
 } from './annots.js';
+import {
+  installChrome, doUndo, doRedo, dismissOverlays, openShortcuts,
+} from './chrome.js';
 import {
   installLaunchHandler, installDragAndDrop, openViaPicker,
   openViaPickerInTabs, openInTabs, takeInputMode,
@@ -29,58 +29,6 @@ import { loadPrefs, installPrefSaving, forgetSavedSession } from './persist.js';
 const $ = (id) => document.getElementById(id);
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdf.worker.min.js';
-
-// ============================================================
-// Toolbar: colors and font size
-// ============================================================
-function buildColorSwatches() {
-  const grp = $('colorGrp');
-  for (const c of COLORS) {
-    const sw = document.createElement('button');
-    sw.className = 'swatch' + (c === state.currentColor ? ' selected' : '');
-    sw.style.background = c;
-    sw.title = c;
-    sw.setAttribute('aria-label', `Color ${c}`);
-    sw.addEventListener('click', () => {
-      applyAnnoStyle({ color: c });
-      grp.querySelectorAll('.swatch').forEach((n) => n.classList.remove('selected'));
-      sw.classList.add('selected');
-    });
-    grp.appendChild(sw);
-  }
-}
-
-function buildPenSizes() {
-  const grp = $('penSizeGrp');
-  if (!grp) return;
-  for (const p of PEN_SIZES) {
-    const b = document.createElement('button');
-    b.className = 'pen-dot' + (p.width === state.currentPenSize ? ' toggled' : '');
-    b.title = `${p.label} pen (${p.width}pt)`;
-    b.setAttribute('aria-label', `${p.label} pen`);
-    // Scaled up a little so the three presets are tellable apart at
-    // toolbar size; the number in the tooltip is the real width.
-    const dot = document.createElement('i');
-    const px = Math.max(3, Math.round(p.width * 2.2));
-    dot.style.width = px + 'px';
-    dot.style.height = px + 'px';
-    b.appendChild(dot);
-    b.addEventListener('click', () => {
-      applyAnnoStyle({ penSize: p.width });
-      syncPenSizeUi();
-    });
-    grp.appendChild(b);
-  }
-}
-
-/** Re-mark the active preset from state. */
-function syncPenSizeUi() {
-  const grp = $('penSizeGrp');
-  if (!grp) return;
-  grp.querySelectorAll('.pen-dot').forEach((n, i) => {
-    n.classList.toggle('toggled', PEN_SIZES[i].width === state.currentPenSize);
-  });
-}
 
 // ============================================================
 // Pages drawer (narrow screens)
@@ -105,20 +53,23 @@ function installPagesDrawer() {
 }
 
 // ============================================================
-// Page navigation — shared by the arrow keys and the scroll wheel
-// ============================================================
-function stepPage(dir) {
-  const idx = state.pages.findIndex((p) => p.id === state.selectedPageId);
-  if (idx < 0) return false;
-  const next = state.pages[idx + dir];
-  if (!next) return false;
-  selectPage(next.id);
-  return true;
-}
-
-// ============================================================
 // Keyboard
 // ============================================================
+const TOOL_KEYS = {
+  v: 'select', t: 'text', q: 'callout', l: 'callout', p: 'pen',
+  h: 'highlight', a: 'arrow', r: 'rect', c: 'cloud',
+};
+const TOOL_BUTTONS = {
+  toolSelect: 'select', toolText: 'text', toolCallout: 'callout', toolPen: 'pen',
+  toolHighlight: 'highlight', toolArrow: 'arrow', toolRect: 'rect', toolCloud: 'cloud',
+};
+
+/** A tool stays armed until it is put away. Picking the one already in
+ *  hand is one way to do that; Esc and Select are the others. */
+function toggleTool(tool) {
+  setActiveTool(state.activeTool === tool ? 'select' : tool);
+}
+
 function installKeyboard() {
   document.addEventListener('keydown', (e) => {
     const mod = e.metaKey || e.ctrlKey;
@@ -150,8 +101,34 @@ function installKeyboard() {
     if (mod && e.key === '9') { e.preventDefault(); setZoomMode('fit-page'); return; }
 
     if (isTypingTarget(e.target) && e.key !== 'Escape') return;
+    // Past this point nothing is being typed into, so these belong to the
+    // document. Inside a note, ⌘Z and ⌘C/⌘V are the browser's own.
+    if ($('shortcutsDialog').open) return;
+    const key = e.key.toLowerCase();
+    if (mod && key === 'z') { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return; }
+    if (mod && key === 'y') { e.preventDefault(); doRedo(); return; }
+    if (mod && key === 'd') {
+      // Always claimed: letting it through would open the bookmark sheet.
+      e.preventDefault();
+      if (!duplicateSelected()) setStatus('Select a markup to duplicate it.');
+      return;
+    }
+    if (mod && key === 'c') {
+      // Only when there is a markup to copy and no text selected — a
+      // selection anywhere on the page is still the browser's to copy.
+      if (state.selectedAnnoId && !String(window.getSelection?.() || '') && copySelected()) {
+        e.preventDefault();
+        setStatus(`Copied. ${e.metaKey ? '⌘' : 'Ctrl+'}V pastes it on whichever page is showing.`, 'ok');
+      }
+      return;
+    }
+    if (mod && key === 'v') {
+      if (pasteMarkup()) e.preventDefault();
+      return;
+    }
 
     if (e.key === 'Escape') {
+      if (dismissOverlays()) return;
       setWheelZoom(false);
       setActiveTool('select');
       document.querySelectorAll('.anno-text').forEach((n) => n.blur());
@@ -168,17 +145,10 @@ function installKeyboard() {
     // on the way to the print dialog, and ⌘Q/⌃T likewise picked up a tool.
     if (mod || e.altKey) return;
 
-    const k = e.key.toLowerCase();
-    if (k === 't') {
-      setActiveTool(state.activeTool === 'text' ? 'select' : 'text');
-    }
+    if (e.key === '?') { openShortcuts(); return; }
     // Q is the documented callout shortcut; L still works out of habit.
-    if (k === 'q' || k === 'l') {
-      setActiveTool(state.activeTool === 'callout' ? 'select' : 'callout');
-    }
-    if (k === 'p') {
-      setActiveTool(state.activeTool === 'pen' ? 'select' : 'pen');
-    }
+    const tool = TOOL_KEYS[key];
+    if (tool && state.selectedPageId) toggleTool(tool);
     // Page navigation
     if (e.key === 'ArrowDown' || e.key === 'ArrowRight' ||
         e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
@@ -218,15 +188,9 @@ function installServiceWorker() {
 function wireUi() {
   const drawer = installPagesDrawer();
 
-  buildColorSwatches();
-  buildPenSizes();
-  $('fontSizeSelect').value = String(state.currentFontSize);
-  $('fontSizeSelect').addEventListener('change', (e) => {
-    applyAnnoStyle({ fontSize: parseInt(e.target.value, 10) });
-  });
-
   // --- Open ---
   $('btnOpen').addEventListener('click', openViaPicker);
+  $('btnEmptyOpen').addEventListener('click', openViaPicker);
   $('btnOpenTabs').addEventListener('click', openViaPickerInTabs);
   $('fileInput').addEventListener('change', async (e) => {
     const files = [...e.target.files];
@@ -244,13 +208,12 @@ function wireUi() {
   $('btnSaveAs').addEventListener('click', saveAs);
   $('btnDownload').addEventListener('click', downloadCopy);
   $('btnFlatten').addEventListener('click', saveFlattenedCopy);
-  // Where there's no save panel, "Save" and "Download" are the same
-  // action, so don't show both.
+  // Where there's no save panel, Save *is* a download, and Save As and
+  // Download would be two more names for it.
   if (!canUseFileSystemAccess) {
-    $('btnSave').style.display = 'none';
-    $('btnSaveAs').style.display = 'none';
-  } else {
-    $('btnDownload').style.display = 'none';
+    $('btnSaveAs').hidden = true;
+    $('btnDownload').hidden = true;
+    $('btnSave').title = 'Download the edited PDF — this browser has no save panel. Markups stay editable.';
   }
 
   // --- Pages ---
@@ -268,14 +231,10 @@ function wireUi() {
   $('btnClearAll').addEventListener('click', () => {
     // Clear All empties *this* document. The other tabs are not its to touch.
     if (!clearAll()) return;
-    resetDocument();
-    invalidateAllThumbs();
-
     renderTabs();
     updateTitle();
     renderThumbnails();
     renderMainCanvas();
-    setStatus('Cleared.', 'ok');
   });
 
   installThumbReorder(
@@ -286,19 +245,12 @@ function wireUi() {
   );
 
   // --- Tools ---
-  $('toolText').addEventListener('click', () =>
-    setActiveTool(state.activeTool === 'text' ? 'select' : 'text'));
-  $('toolCallout').addEventListener('click', () =>
-    setActiveTool(state.activeTool === 'callout' ? 'select' : 'callout'));
-  $('toolPen').addEventListener('click', () =>
-    setActiveTool(state.activeTool === 'pen' ? 'select' : 'pen'));
-  $('btnDeleteAnno').addEventListener('click', () => {
-    if (!state.selectedAnnoId) return;
-    const page = state.pages.find((p) => p.id === state.selectedPageId);
-    if (page) deleteAnnotation(page, state.selectedAnnoId);
-  });
+  for (const [id, tool] of Object.entries(TOOL_BUTTONS)) {
+    $(id).addEventListener('click', () => toggleTool(tool));
+  }
   $('annoLayer').addEventListener('click', handleLayerClick);
-  installPenDrawing();
+  installDrawing();
+  installChrome();
 
   // --- Zoom ---
   $('btnZoomIn').addEventListener('click', () => zoomStep(1));
@@ -354,6 +306,7 @@ async function boot() {
   // Before the toolbar exists, so that it is built from them.
   loadPrefs();
   wireUi();
+  setActiveTool('select');
   updateTitle();
   updateToolbarState();
   // One stamp in index.html, shown in two places.

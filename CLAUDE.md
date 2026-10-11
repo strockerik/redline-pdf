@@ -43,15 +43,18 @@ js/files.js     open / save / launchQueue file handler
 js/persist.js   the few preferences kept between launches (localStorage)
 js/pages.js     import, blank pages, delete, rotate, reorder
 js/view.js      page canvas, zoom, thumbnails, reorder gesture
-js/annots.js    text box + callout tools, pointer interactions
+js/annots.js    the markup tools and their pointer interactions
 js/export.js    pdf-lib output, and reading Redline's markups back in
 js/plot.js      heavy vector pages: worker jobs, residual PDF, draw calls
 js/plotcompile.js   content stream -> GPU instances + residual stream; pure,
                     no DOM (runs in the worker and under JavaScriptCore)
 js/plotworker.js    module worker: inflate + compile
 js/plotgl.js    WebGL2 renderer for the above
+js/history.js   undo / redo: one stack of checkpoints per document
 js/tabs.js      document tabs: the open-document list and switching
-js/main.js      wiring and boot
+js/chrome.js    the command surface: file menu, properties row, page
+                field, markups list, save chip, save-failure alert
+js/main.js      wiring, keyboard, boot
 ```
 
 `view.js` is the only module that imports `plot.js`, and nothing in the
@@ -60,6 +63,24 @@ plot files knows about zoom modes, tabs or annotations.
 `view.js` and `annots.js` import each other. That cycle is fine because
 nothing runs at module-evaluation time — but don't add top-level side
 effects to either.
+
+**Every markup is one of two families.** A *note* (`text`, `callout`) is
+a box of text. Everything else — `ink`, `highlight`, `arrow`, `rect`,
+`cloud` — is a *point shape*: a colour, a weight and a list of points in
+visual space. `shapePolylines()` in state.js turns one into the lines to
+stroke, and the editor (SVG) and the exporter (pdf-lib) both draw from
+it, so a shape cannot look one way on screen and another in the file. A
+new shape tool is a case in `shapePolylines`, an annotation subtype in
+`attachMarkup`, and a button; rotation, moving, saving and undo already
+handle it.
+
+**Undo is a checkpoint taken before each change** (`checkpoint(label)` in
+history.js) — the page list, each page's rotation and markups, the
+sources and the document's identity. Any new code that changes the
+document must take one first; see hazards.md §3. `chrome.js` redraws the
+whole command surface from `state` and the history and holds no state of
+its own; view.js calls it through `onToolbarUpdate` because chrome.js
+imports view.js and the reverse would be a cycle.
 
 **Tabs hold whole documents, and `state` holds the active one.** Every
 per-document field (`pages`, `sources`, `docName`, `fileHandle`,
@@ -74,7 +95,8 @@ cache is keyed by the page object for exactly that reason.
 
 **Documents close with the app. Nothing is reopened, and nothing about a
 document is ever stored.** Every launch starts empty; only the fit mode,
-colour, text size and pen size are kept (persist.js, localStorage). This
+colours, text size, line weight and note fill are kept (persist.js,
+localStorage). This
 is a decision, not an omission: the saved session nobody wanted raced
 every file opened from Finder, and — with a file handle in it — made
 Chrome crash at exit. Don't bring back autosave, and above all don't put
@@ -82,8 +104,9 @@ a `FileSystemFileHandle` into IndexedDB. Unsaved work is guarded by the
 `beforeunload` prompt alone, which iOS does not show.
 
 **A saved markup is a PDF annotation, not paint — until it is flattened.**
-Save writes each note, callout and pen stroke as a standard annotation
-(FreeText / Ink) and Redline reads them back as editable markups on open;
+Save writes each markup as a standard annotation (FreeText, Ink, Line,
+Square, or a cloudy Polygon) and Redline reads them back as editable
+markups on open;
 "Flatten…" saves a copy with them painted into the pages instead. Three
 things hold this together (export.js, "Markups that stay editable"):
 - The annotation's appearance stream is drawn by `drawAnnotationOnPage`,
@@ -182,6 +205,13 @@ error that only shows up on 90°/270° pages and is miserable to eyeball.
   fit mode the user last *chose*; `zoomMode` flips to `'custom'` the moment
   anything zooms, so reading it there would make one wheel-zoom in Fit W
   silently change what the wheel does next.
+- **Tools stay armed** until Esc, Select, or the same tool again. A click
+  that only ends typing in a note must not place another one.
+- **The properties row has a fixed height** and shows only what applies.
+  Don't let a control that comes and goes change the height of anything
+  above the stage — it re-fits the page.
+- **A failed save goes to `#saveAlert`, never `setStatus`.** It must stay
+  on screen until dealt with.
 - **A trackpad pinch is a `wheel` event with `ctrlKey` set** and is
   otherwise identical to a real Ctrl+wheel. `installStageGestures` tracks
   whether Ctrl is physically down to tell them apart — needed because
@@ -203,12 +233,17 @@ app-side code can override it.
 
 ## Scope
 
-Deferred, by decision: highlight / arrow / shape tools, undo-redo,
-multi-select, text search. The module split is what keeps adding any of
-them a contained change.
+Deferred, by decision: measurement (it needs a scale per sheet and its
+own schedule), stamps, text search, multi-select, marquee zoom, page
+extraction. The module split is what keeps adding any of them a contained
+change.
 
-Shipped since: freehand ink (`type: 'ink'`, a point list in visual space;
-it takes its own branch in `drawAnnotationOnPage`,
-`remapAnnotationsForRotation` and `buildAnnoDom`, having no box, text or
-font size) and document tabs (see the architecture note above — the rest
-of the app never learned about them).
+Shipped since: freehand ink, then document tabs (see the architecture
+note above — the rest of the app never learned about them), then the
+rev 20 redesign from the UX review in `.ux-review/` (gitignored): undo
+and redo, tools that stay armed, highlight / arrow / box / cloud, one
+Save with the other file commands behind it, the page field, the markups
+list, note fill, duplicate and copy/paste, and the save chip and alert.
+
+Kept through that review, on purpose: no autosave, documents close with
+the app, Chromium-only for save-in-place.

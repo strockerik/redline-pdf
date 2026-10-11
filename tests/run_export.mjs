@@ -313,7 +313,106 @@ try {
     check('and left in the file rather than deleted', loaded.getPage(0).node.Annots().size() === hostile.length - 1);
     const m = got[0] ? got[0].markup : {};
     check('an accepted one carries only the fields a markup has',
-      Object.keys(m).sort().join() === 'color,fontSize,text,type,width,x,y' && ({}).polluted === undefined, Object.keys(m).join());
+      Object.keys(m).sort().join() === 'color,fill,fontSize,text,type,width,x,y' && ({}).polluted === undefined, Object.keys(m).join());
+  }
+
+  // --- 14. Highlight, arrow, box and cloud are point shapes like ink ---
+  {
+    const { shapePolylines } = stateMod;
+    const shapes = () => ([
+      { id: 1, type: 'highlight', color: '#e3b505', size: 13, points: [{ x: 60, y: 80 }, { x: 120, y: 82 }, { x: 200, y: 79.5 }] },
+      { id: 2, type: 'arrow', color: '#b23a3a', size: 2.5, points: [{ x: 100, y: 300 }, { x: 240, y: 220 }] },
+      { id: 3, type: 'rect', color: '#1f6feb', size: 1.2, points: [{ x: 300, y: 400 }, { x: 420, y: 470 }] },
+      { id: 4, type: 'cloud', color: '#b23a3a', size: 2.5, points: [{ x: 80, y: 500 }, { x: 260, y: 600 }] },
+    ]);
+    S.pages = [0, 90, 180, 270].map((rotation, i) => ({
+      id: i + 1, kind: 'imported', sourceId: 1, sourcePageIndex: 0, W0: 612, H0: 792, rotation, annotations: shapes(),
+    }));
+    const bytes = await buildPdfBytes();
+    const d = await PDFDocument.load(bytes);
+    const kinds2 = ours(d.getPage(0)).map((x) => String(x.get(N('Subtype'))));
+    check('new shapes are standard annotation types too', kinds2.join() === '/Ink,/Line,/Square,/Polygon', kinds2.join());
+    check('a cloud says it is one', String(ours(d.getPage(0))[3].get(N('IT'))) === '/PolygonCloud');
+
+    // The rectangle must hold everything drawn — an arrow's head and a
+    // cloud's scallops reach past the two points that define them.
+    const { toNative } = stateMod;
+    let holds = true, why = '';
+    d.getPages().forEach((p, i) => {
+      const R = [0, 90, 180, 270][i];
+      ours(p).forEach((an, k) => {
+        const rect = an.lookup(N('Rect')).asArray().map((n) => n.asNumber());
+        const a = shapes()[k];
+        for (const line of shapePolylines(a)) for (const q of line) {
+          const n = toNative(R, 612, 792, q.x, q.y);
+          const h = a.size / 2;
+          if (n.x - h < rect[0] - 0.02 || n.x + h > rect[2] + 0.02 || n.y - h < rect[1] - 0.02 || n.y + h > rect[3] + 0.02) {
+            holds = false; why = `${a.type} at R=${R}`;
+          }
+        }
+      });
+    });
+    check('each rectangle holds the whole shape at every rotation', holds, why);
+
+    // A highlight is one translucent path that multiplies with the sheet.
+    const hl = ours(d.getPage(0))[0].lookup(N('AP'), PDFDict).lookup(N('N'));
+    const hlBody = text(decodePDFRawStream(hl).decode());
+    const gs = hl.dict.lookup(N('Resources'), PDFDict).lookup(N('ExtGState'), PDFDict);
+    const gsDict = gs.lookup(gs.keys()[0], PDFDict);
+    check('a highlight is stroked once, as one path', (hlBody.match(/\bS\b/g) || []).length === 1, hlBody.slice(0, 120));
+    check('translucent, and multiplied with what is under it',
+      gsDict.lookup(N('CA')).asNumber() === stateMod.HIGHLIGHT_OPACITY && String(gsDict.get(N('BM'))) === '/Multiply');
+    check('with round joins', /\b1 j\b/.test(hlBody) && /\b1 J\b/.test(hlBody), hlBody.slice(0, 120));
+
+    const back = takeMarkups(d);
+    let exact2 = true;
+    for (let i = 0; i < 4; i++) (back.get(i) || []).forEach((t, k) => {
+      if (!same({ ...t.markup, type: 'ink' }, { ...shapes()[k], type: 'ink' }) || t.markup.type !== shapes()[k].type) exact2 = false;
+    });
+    check('and all four come back as they were', [0, 1, 2, 3].every((i) => (back.get(i) || []).length === 4) && exact2,
+      JSON.stringify(back.get(1)));
+
+    S.pages = [S.pages[0]];
+    const flatDoc = await PDFDocument.load(await buildPdfBytes({ flatten: true }));
+    const painted = pageContent(flatDoc.getPage(0));
+    check('flattened, they are painted into the page', flatDoc.getPage(0).node.Annots().size() === 0
+      && (painted.match(/\bS\b/g) || []).length === 4, `${(painted.match(/\bS\b/g) || []).length} strokes`);
+
+    // An arrow, a box and a cloud are two points. Anything else under
+    // those names did not come from this editor.
+    const odd = await PDFDocument.create();
+    const pg = odd.addPage([612, 792]);
+    for (const h of [
+      { v: 1, R: 0, type: 'arrow', color: '#000000', size: 2, points: [[1, 2], [3, 4], [5, 6]] },
+      { v: 1, R: 0, type: 'cloud', color: '#000000', size: 2, points: [[1, 2]] },
+      { v: 1, R: 0, type: 'rect', color: '#000000', size: 2, points: [[1, 2], [30, 40]] },
+    ]) {
+      pg.node.addAnnot(odd.context.register(odd.context.obj({
+        Type: 'Annot', Subtype: 'Square', Rect: [0, 0, 10, 10], RedlineMarkup: PDFHexString.fromText(JSON.stringify(h)),
+      })));
+    }
+    const got = takeMarkups(await PDFDocument.load(await odd.save())).get(0) || [];
+    check('a two-point shape with the wrong number of points is refused', got.length === 1 && got[0].markup.type === 'rect', `${got.length} accepted`);
+  }
+
+  // --- 15. A note's white fill is a choice, and the choice is kept ---
+  {
+    const note = (fill) => ({ id: 1, type: 'text', x: 40, y: 60, width: 170, text: 'Over linework', fontSize: 12, color: '#b23a3a', fill });
+    const paint = async (fill) => {
+      S.pages = [{ id: 1, kind: 'imported', sourceId: 1, sourcePageIndex: 0, W0: 612, H0: 792, rotation: 0, annotations: [note(fill)] }];
+      return pageContent((await PDFDocument.load(await buildPdfBytes({ flatten: true }))).getPage(0));
+    };
+    const filled = await paint(true), bare = await paint(false);
+    check('a filled note paints an opaque white box', /1 1 1 rg/.test(filled) && /\bB\b/.test(filled) && !/\/GS/.test(filled), filled.slice(0, 160));
+    check('an unfilled one paints only its frame', !/1 1 1 rg/.test(bare) && !/\bB\b/.test(bare) && /\bS\b/.test(bare), bare.slice(0, 160));
+
+    const trip = async (fill) => {
+      S.pages = [{ id: 1, kind: 'imported', sourceId: 1, sourcePageIndex: 0, W0: 612, H0: 792, rotation: 0, annotations: [note(fill)] }];
+      return takeMarkups(await PDFDocument.load(await buildPdfBytes())).get(0)[0].markup.fill;
+    };
+    check('the choice survives a save', (await trip(false)) === false && (await trip(true)) === true);
+    check('a note saved before the option existed comes back filled', marks().every((m) => m.fill === undefined)
+      && (takeMarkups(await PDFDocument.load(editable)).get(0) || []).filter((t) => t.markup.type !== 'ink').every((t) => t.markup.fill === true));
   }
 }
 

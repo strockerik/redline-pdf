@@ -674,6 +674,7 @@ async function paintPage(page, token, opts) {
   overlay.style.width = cssW + 'px';
   overlay.style.height = cssH + 'px';
   $('leaderSvg').setAttribute('viewBox', `0 0 ${cssW} ${cssH}`);
+  $('hiliteSvg').setAttribute('viewBox', `0 0 ${cssW} ${cssH}`);
 
   renderAnnotationLayer(page);
 
@@ -875,8 +876,8 @@ export function installStageGestures(onPageStep) {
    *  hijack moving a note, dragging a leader tip, or picking a stroke. */
   const ownsTheDrag = (target) =>
     !!(target.closest?.('.anno-box') ||
-       target.classList?.contains('ink-stroke') ||
-       target.classList?.contains('tip-handle'));
+       ['ink-stroke', 'ink-hit', 'tip-handle', 'pt-handle']
+         .some((c) => target.classList?.contains(c)));
 
   // --- Double-click to latch the wheel into zoom ---
   stage.addEventListener('dblclick', (e) => {
@@ -956,7 +957,11 @@ export function installStageGestures(onPageStep) {
 }
 
 export function isTypingTarget(el) {
-  return !!(el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)));
+  if (!el) return false;
+  // A checkbox takes focus when it is clicked but is not somewhere to
+  // type; treating it as one left every shortcut dead until the next click.
+  if (el.tagName === 'INPUT' && /^(checkbox|radio|button)$/.test(el.type)) return false;
+  return !!(el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
 }
 
 // ============================================================
@@ -1056,6 +1061,16 @@ export function updateThumbBadge(page) {
   badge.textContent = n;
 }
 
+// Drawn, not typed: a rotate arrow that is a text character changes
+// weight and baseline from one platform's font to the next.
+const thumbIcon = (d) => `<svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true">`
+  + `<path d="${d}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
+const THUMB_ICON = {
+  ccw: thumbIcon('M3.2 7.5a4.3 4.3 0 108-2.2M3 3.2v3h3'),
+  cw: thumbIcon('M10.8 7.5a4.3 4.3 0 11-8-2.2M11 3.2v3h-3'),
+  del: thumbIcon('M3.5 3.5l7 7M10.5 3.5l-7 7'),
+};
+
 export function renderThumbnails() {
   const list = $('thumbList');
   $('sidebarEmptyHint').style.display = state.pages.length ? 'none' : 'block';
@@ -1081,9 +1096,9 @@ export function renderThumbnails() {
     row.innerHTML =
       `<div class="thumb-label">PG ${i + 1}${page.kind === 'blank' ? ' · blank' : ''}</div>` +
       `<div class="thumb-actions">` +
-      `<button class="mini-btn" data-act="ccw" title="Rotate counter-clockwise" aria-label="Rotate page ${i + 1} counter-clockwise">⟲</button>` +
-      `<button class="mini-btn" data-act="cw" title="Rotate clockwise" aria-label="Rotate page ${i + 1} clockwise">⟳</button>` +
-      `<button class="mini-btn del" data-act="del" title="Delete page" aria-label="Delete page ${i + 1}">✕</button>` +
+      `<button class="mini-btn" data-act="ccw" title="Rotate this page in the document, counter-clockwise" aria-label="Rotate page ${i + 1} counter-clockwise in the document">${THUMB_ICON.ccw}</button>` +
+      `<button class="mini-btn" data-act="cw" title="Rotate this page in the document, clockwise" aria-label="Rotate page ${i + 1} clockwise in the document">${THUMB_ICON.cw}</button>` +
+      `<button class="mini-btn del" data-act="del" title="Delete this page from the document" aria-label="Delete page ${i + 1}">${THUMB_ICON.del}</button>` +
       `</div>`;
     el.appendChild(row);
 
@@ -1225,13 +1240,20 @@ export function installThumbReorder(onReorder, onSelect, onRotate, onDelete) {
 // ============================================================
 // Toolbar enable/disable
 // ============================================================
+// The rest of the command surface — properties, page field, undo, save
+// state — is drawn by chrome.js, which registers itself here. It imports
+// this module, so this module cannot import it.
+let afterToolbarUpdate = null;
+export function onToolbarUpdate(fn) { afterToolbarUpdate = fn; }
+
 export function updateToolbarState() {
   const page = state.pages.find((p) => p.id === state.selectedPageId);
   const hasPage = !!page;
   const hasDoc = state.pages.length > 0;
 
-  for (const id of ['btnRotateCCW', 'btnRotateCW', 'btnDeletePage', 'toolText', 'toolCallout',
-                    'toolPen', 'btnZoomIn', 'btnZoomOut', 'btnFitWidth', 'btnFitPage']) {
+  for (const id of ['btnRotateCCW', 'btnRotateCW', 'btnDeletePage', 'toolSelect', 'toolText',
+                    'toolCallout', 'toolPen', 'toolHighlight', 'toolArrow', 'toolRect', 'toolCloud',
+                    'btnZoomIn', 'btnZoomOut', 'btnFitWidth', 'btnFitPage']) {
     const el = $(id);
     if (el) el.disabled = !hasPage;
   }
@@ -1239,10 +1261,9 @@ export function updateToolbarState() {
     const el = $(id);
     if (el) el.disabled = !hasDoc;
   }
-  const delAnno = $('btnDeleteAnno');
-  if (delAnno) delAnno.disabled = !state.selectedAnnoId;
 
   updateZoomReadout();
+  if (afterToolbarUpdate) afterToolbarUpdate();
 }
 
 export function updateTitle() {

@@ -13,7 +13,12 @@ export const BLANK_SIZES = {
   Tabloid: [792, 1224],
 };
 
-export const COLORS = ['#b23a3a', '#1c2b36', '#1f6feb', '#1a7f37', '#8e44ad'];
+export const COLORS = ['#b23a3a', '#1c2b36', '#1f6feb', '#1a7f37', '#8e44ad', '#e3b505'];
+// What a screen reader should call each one; a hex value is not a name.
+export const COLOR_NAMES = {
+  '#b23a3a': 'Red', '#1c2b36': 'Black', '#1f6feb': 'Blue',
+  '#1a7f37': 'Green', '#8e44ad': 'Purple', '#e3b505': 'Amber',
+};
 
 export const ANNO_PAD = 6;             // pt, padding inside a text box
 export const LINE_HEIGHT_MULT = 1.28;  // multiplier of font size
@@ -30,10 +35,50 @@ export const PEN_SIZES = [
 ];
 export const PEN_MIN_POINT_DIST = 1.2;  // pt
 
+// Every markup is one of two families. A note (text, callout) is a box of
+// text. Everything else is a *point shape*: a colour, a line weight and a
+// list of points in visual space — a pen stroke and a highlight are the
+// path itself, an arrow is tail and tip, a box and a cloud are two
+// opposite corners. Keeping them all as points is what lets rotation,
+// moving, saving and undo treat five tools as one.
+export const POINT_TYPES = new Set(['ink', 'highlight', 'arrow', 'rect', 'cloud']);
+export const isPointShape = (a) => POINT_TYPES.has(a.type);
+
+// Tool -> the markup type it makes. Select makes nothing.
+export const TOOL_TYPE = {
+  text: 'text', callout: 'callout', pen: 'ink',
+  highlight: 'highlight', arrow: 'arrow', rect: 'rect', cloud: 'cloud',
+};
+export const TOOL_LABEL = {
+  select: 'Select', text: 'Text', callout: 'Callout', pen: 'Pen',
+  highlight: 'Highlight', arrow: 'Arrow', rect: 'Box', cloud: 'Cloud',
+};
+export const TYPE_LABEL = {
+  text: 'Text', callout: 'Callout', ink: 'Pen', highlight: 'Highlight',
+  arrow: 'Arrow', rect: 'Box', cloud: 'Cloud',
+};
+
+// A highlighter is a broad translucent stroke; the three weight presets
+// mean these widths for it rather than the pen's.
+const HIGHLIGHT_WIDTHS = [8, 13, 20];   // pt, for Fine / Medium / Bold
+export const HIGHLIGHT_OPACITY = 0.4;
+
+/** The stroke width a new markup of `type` gets for a pen-size preset. */
+export function sizeForType(type, penSize) {
+  if (type !== 'highlight') return penSize;
+  const i = PEN_SIZES.findIndex((p) => p.width === penSize);
+  return HIGHLIGHT_WIDTHS[i < 0 ? 1 : i];
+}
+
 // A PDF point is 1/72in; a CSS reference pixel is 1/96in. Rendering at
 // this ratio makes "100%" mean actual physical size on screen, the way
 // Acrobat and Bluebeam use the number.
 export const PT_TO_PX = 96 / 72;
+
+// How this platform writes its command key, for anything that names a
+// shortcut on screen.
+export const MOD_KEY = (typeof navigator !== 'undefined'
+  && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '')) ? '⌘' : 'Ctrl+';
 
 export const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6];
 export const MIN_ZOOM = 0.1;
@@ -51,7 +96,7 @@ export const state = {
 
   selectedPageId: null,
   selectedAnnoId: null,
-  activeTool: 'select',     // 'select' | 'text' | 'callout' | 'pen'
+  activeTool: 'select',     // a key of TOOL_LABEL
   // Space forces pan, whatever the active tool. Shared so the pen can
   // stand aside for it instead of swallowing the press.
   spaceHeld: false,
@@ -62,8 +107,10 @@ export const state = {
   pendingCalloutTip: null,  // {x,y} in pt, while placing a callout
 
   currentColor: COLORS[0],
+  currentHighlightColor: '#e3b505',   // a highlighter keeps its own colour
   currentFontSize: 12,
   currentPenSize: PEN_SIZES[1].width,
+  currentFill: true,                  // new notes get a white box behind the text
 
   zoomMode: 'fit-width',    // 'fit-width' | 'fit-page' | 'custom'
   // The last fit mode the user actually chose. Zooming flips zoomMode to
@@ -255,6 +302,65 @@ export function computeArrowWings(attach, tip, len = 9, angleDeg = 27) {
   ];
 }
 
+/** The lines that draw a point shape, as polylines in visual space. The
+ *  editor strokes these on screen and the exporter strokes the same ones
+ *  into the PDF, so a shape cannot look one way here and another there. */
+export function shapePolylines(a) {
+  const p = a.points || [];
+  if (!p.length) return [];
+  if (a.type === 'arrow') {
+    const tail = p[0], tip = p[p.length - 1];
+    const [w1, w2] = computeArrowWings(tail, tip, Math.max(9, (a.size || 2) * 4));
+    return [[tail, tip], [w1, tip, w2]];
+  }
+  if (a.type === 'rect' || a.type === 'cloud') {
+    const q = p[p.length - 1];
+    const x0 = Math.min(p[0].x, q.x), x1 = Math.max(p[0].x, q.x);
+    const y0 = Math.min(p[0].y, q.y), y1 = Math.max(p[0].y, q.y);
+    if (a.type === 'rect') {
+      return [[{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }, { x: x0, y: y0 }]];
+    }
+    return [cloudOutline(x0, y0, x1, y1)];
+  }
+  return [p];
+}
+
+/** A revision cloud around a rectangle: a closed run of arcs, each
+ *  bulging outward, flattened to points so it is the same shape wherever
+ *  it is drawn and whichever way the page is turned. */
+function cloudOutline(x0, y0, x1, y1) {
+  const CHORD = 16, STEPS = 6;             // pt per scallop; segments per arc
+  const out = [];
+  const corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  // Outward normals for the four sides, walking clockwise in visual space.
+  const normals = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+  for (let s = 0; s < 4; s++) {
+    const [ax, ay] = corners[s], [bx, by] = corners[(s + 1) % 4];
+    const len = Math.hypot(bx - ax, by - ay);
+    const n = Math.max(1, Math.round(len / CHORD));
+    const c = len / n;
+    if (!(c > 0)) continue;
+    const tx = (bx - ax) / len, ty = (by - ay) / len;
+    const [nx, ny] = normals[s];
+    const R = c * 0.62;
+    const d = Math.sqrt(R * R - (c / 2) * (c / 2));
+    const alpha = Math.asin((c / 2) / R);
+    for (let k = 0; k < n; k++) {
+      const mx = ax + tx * c * (k + 0.5), my = ay + ty * c * (k + 0.5);
+      const cx = mx - nx * d, cy = my - ny * d;
+      for (let i = (out.length ? 1 : 0); i <= STEPS; i++) {
+        const th = -alpha + (2 * alpha * i) / STEPS;
+        out.push({
+          x: cx + R * (Math.sin(th) * tx + Math.cos(th) * nx),
+          y: cy + R * (Math.sin(th) * ty + Math.cos(th) * ny),
+        });
+      }
+    }
+  }
+  if (out.length) out.push({ ...out[0] });
+  return out;
+}
+
 export function hexToRgb01(hex) {
   const m = hex.replace('#', '');
   return {
@@ -273,6 +379,8 @@ export function setStatus(msg, kind) {
   const el = document.getElementById('statusMsg');
   if (!el) return;
   el.textContent = msg || '';
+  // The strip is one line and clips; the whole message is a hover away.
+  el.title = msg || '';
   el.className = kind || '';
   clearTimeout(statusTimer);
   if (msg) {
@@ -280,6 +388,18 @@ export function setStatus(msg, kind) {
       if (el.textContent === msg) { el.textContent = ''; el.className = ''; }
     }, 5000);
   }
+}
+
+/** Commit a note that is being typed into, by taking focus off it.
+ *
+ *  Call before anything that swaps out what is on screen — another page,
+ *  another document, a step back in history. A note's text is only taken
+ *  on blur, and a note removed from the DOM while it still has focus may
+ *  never get one: the typing is lost, or worse, is committed a moment
+ *  later against whichever document has become the active one. */
+export function finishTyping() {
+  const el = document.activeElement;
+  if (el && el.classList && el.classList.contains('anno-text')) el.blur();
 }
 
 const dirtyListeners = [];

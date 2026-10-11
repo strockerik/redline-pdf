@@ -51,6 +51,16 @@ The richest source of bugs in this app, because the failures are silent.
   There is a `window.blur` reset in `view.js` for exactly this.
 - Does a mode flag survive a reload when it should not? Transient mouse
   modes are deliberately excluded from the snapshot.
+- **A tool stays armed until it is put away.** Every tool, not just the
+  pen: `placeNote` deliberately does not go back to select. So any click
+  that *ends* something — typing in a note, a drag — must not also be read
+  as a request for the next markup. `wasEditing` and `swallowClick` in
+  annots.js are those two guards; a new tool needs to honour both.
+- **Controls that come and go must not move the page.** The properties
+  row shows only what applies to the tool in hand, in a row of fixed
+  height. The same controls in a toolbar that grew resized the stage, and
+  that resize raced the thumbnail painter. The browser suite pins the
+  heights before and after arming a tool.
 
 ## 3. Cross-module invariants
 
@@ -78,17 +88,43 @@ The richest source of bugs in this app, because the failures are silent.
   size because annots.js measures against it, but is blank. Anything that
   reads pixels, or assumes the page canvas's backing store is the page,
   needs to ask which one is live (`shownPlotImage` in view.js).
-- **A guard that runs per item must not undo itself.** `openFromHandle`
-  runs once per handle in a multi-select; without a `!state.combined`
-  check, the second file re-adopts a save target the first just gave up.
+- **A guard that runs per item must not undo itself.** Opening runs once
+  per handle in a multi-select; the second file must not re-adopt a save
+  target the first just gave up. `importPdfBytes` decides in one place:
+  a file landing in an *empty* document becomes it (name, handle, clean,
+  history starts here); landing among pages it is an edit, and no handle
+  is adopted.
+- **Checkpoint before you change the document.** Undo is a snapshot taken
+  *before* each change (`checkpoint` in history.js). A mutation with no
+  checkpoint is not just un-undoable — the next undo silently takes it
+  away along with the step before it. Drags checkpoint on first movement,
+  not on press, so a click leaves nothing to undo.
+- **Finish typing before swapping what is on screen.** A note's text is
+  taken on blur, and a note removed from the DOM while focused may never
+  get one — or gets it late, when another document is active, and commits
+  there. `finishTyping()` runs before a page change, a tab change, and a
+  step through history. `hold()` also remembers its document, so a late
+  commit still lands on the right stack.
+- **Identity, again.** Markup ids restart per document just as page ids
+  do; the set of freshly placed notes is a WeakSet of objects for the same
+  reason the thumbnail cache is keyed by page object. And undo hands back
+  the *same* page objects, so nothing cached against them is rebuilt.
 
 ## 4. Destructive actions
 
-**There is no undo in this app.** That raises the bar on anything that
-discards work.
+**Undo is the safety net, so there are no "are you sure?" dialogs** on
+anything it covers: page delete, Clear All and markup delete all just
+happen, and say that ⌘Z brings it back. A confirm is still right for what
+undo cannot reach — closing a tab or the window with unsaved work.
 
-- `deletePage` and `clearAll` confirm. `deleteAnnotation` does not — a
-  deliberate call, but revisit it if notes get more expensive to recreate.
+- **"Saved" has to be true.** The save chip and the close-guard read
+  `state.dirty`, which undo and redo recompute from how far the document
+  is from its last save. The trap: undo past a save, then make a new edit.
+  The saved state was on the redo side, which is now gone, so no amount of
+  undoing may report clean again (`adrift` in history.js).
+- **A failed save must not fade.** It raises `#saveAlert`, which stays
+  until dismissed or a save succeeds, says the work is still open, and
+  offers Save As and Download. Never route a save failure to `setStatus`.
 - **Anything that writes to disk needs an unambiguous target.** ⌘S once
   overwrote the *first* file of a merged document with the merged result:
   no dialog, no warning, original gone. A document with no single source
