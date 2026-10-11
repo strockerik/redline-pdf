@@ -111,6 +111,7 @@ export const state = {
   currentFontSize: 12,
   currentPenSize: PEN_SIZES[1].width,
   currentFill: true,                  // new notes get a white box behind the text
+  currentFit: false,                  // new notes shrink to the width of their text
 
   zoomMode: 'fit-width',    // 'fit-width' | 'fit-page' | 'custom'
   // The last fit mode the user actually chose. Zooming flips zoomMode to
@@ -270,8 +271,12 @@ function measureWrapCanvas(text, maxWidth, fontSize) {
 }
 
 export function estimateBoxHeight(anno) {
-  const lines = measureWrapCanvas(anno.text || '', anno.width - ANNO_PAD * 2, anno.fontSize);
-  return Math.max(1, lines.length) * anno.fontSize * LINE_HEIGHT_MULT + ANNO_PAD * 2;
+  // A note that shrinks to its text never wraps: its lines are the ones
+  // that were typed.
+  const count = anno.fit
+    ? String(anno.text || '').split('\n').length
+    : measureWrapCanvas(anno.text || '', anno.width - ANNO_PAD * 2, anno.fontSize).length;
+  return Math.max(1, count) * anno.fontSize * LINE_HEIGHT_MULT + ANNO_PAD * 2;
 }
 
 /** Which edge-midpoint of the box a leader line attaches to, based on

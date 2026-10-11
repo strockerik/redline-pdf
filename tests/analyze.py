@@ -40,7 +40,7 @@ ALLOWED_CYCLES = [frozenset({"view.js", "annots.js"})]
 APP_WIDE_STATE = {
     "docs", "activeDocId", "nextDocId",
     "activeTool", "spaceHeld", "wheelZoom", "pendingCalloutTip",
-    "currentColor", "currentHighlightColor", "currentFontSize", "currentPenSize", "currentFill",
+    "currentColor", "currentHighlightColor", "currentFontSize", "currentPenSize", "currentFill", "currentFit",
     "zoomMode", "lastFitMode", "zoomLevel", "currentScale",
     "domRefs",
 }
@@ -249,11 +249,13 @@ def check_build_stamp():
     """The footer says which build is running, so a stale installed copy
     can be told from a current one at a glance. That only works if the
     number on the page is the number the service worker caches under."""
-    cache = re.search(r"const CACHE = 'redline-v(\d+)'", read("sw.js"))
-    stamp = re.search(r'id="buildStamp">\s*rev (\d+) · (\d{4})-(\d{2})-(\d{2}) · \S', read("index.html"))
+    # major.build — "0.22". The build number goes up on every deploy; the
+    # major number is the owner's to change.
+    cache = re.search(r"const CACHE = 'redline-v(\d+\.\d+)'", read("sw.js"))
+    stamp = re.search(r'id="buildStamp">\s*rev (\d+\.\d+) · (\d{4})-(\d{2})-(\d{2}) · \S', read("index.html"))
     if not stamp:
         fail("index.html carries a build stamp",
-             'expected <span id="buildStamp">rev N · YYYY-MM-DD · what changed</span>')
+             'expected <span id="buildStamp">rev 0.N · YYYY-MM-DD · what changed</span>')
         return
     rev, y, mo, d = stamp.groups()
     try:

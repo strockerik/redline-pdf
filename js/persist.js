@@ -53,6 +53,7 @@ export function loadPrefs() {
   if (PEN_SIZES.some((s) => s.width === p.penSize)) state.currentPenSize = p.penSize;
   if (COLORS.includes(p.highlightColor)) state.currentHighlightColor = p.highlightColor;
   if (typeof p.fill === 'boolean') state.currentFill = p.fill;
+  if (typeof p.shrink === 'boolean') state.currentFit = p.shrink;
   if (p.finderHintDone === true) finderHintDone = true;
 }
 
@@ -65,6 +66,7 @@ function savePrefs() {
       penSize: state.currentPenSize,
       highlightColor: state.currentHighlightColor,
       fill: state.currentFill,
+      shrink: state.currentFit,
       finderHintDone,
     }));
   } catch { /* private mode, storage full: preferences are not worth an error */ }

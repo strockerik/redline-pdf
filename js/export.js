@@ -63,9 +63,29 @@ function toWinAnsi(s) {
     .replace(/[^\x00-\xFF]/g, '?');
 }
 
+/** The lines of a note that shrinks to its text: the ones that were
+ *  typed, never wrapped. (Runs of spaces collapse, as they do when a note
+ *  is wrapped.) */
+const fitLines = (text) => toWinAnsi(text).split('\n').map((p) => p.split(/\s+/).filter(Boolean).join(' '));
+
+/** The note as it will be drawn.
+ *
+ *  One that shrinks to its text takes its width here, from the PDF font —
+ *  not from the screen, where the same words in the system font are a
+ *  slightly different length. Carrying the on-screen width over would
+ *  leave either a gap after the text or its last word on a line of its
+ *  own. Each medium hugs its own text; the left edge is what they share. */
+function sized(a, font) {
+  if (!a.fit || isPointShape(a)) return a;
+  const widest = Math.max(0, ...fitLines(a.text).map((l) => font.widthOfTextAtSize(l, a.fontSize)));
+  return { ...a, width: widest + ANNO_PAD * 2 };
+}
+
 /** How a note's text breaks in the PDF font, and so how tall its box is. */
 function layoutNote(a, font) {
-  const lines = wrapTextForFont(toWinAnsi(a.text), font, a.fontSize, a.width - ANNO_PAD * 2);
+  const lines = a.fit
+    ? fitLines(a.text)
+    : wrapTextForFont(toWinAnsi(a.text), font, a.fontSize, a.width - ANNO_PAD * 2);
   const lineHeight = a.fontSize * LINE_HEIGHT_MULT;
   return { lines, lineHeight, boxHeight: lines.length * lineHeight + ANNO_PAD * 2 };
 }
@@ -104,6 +124,7 @@ export function drawAnnotationOnPage(pdfPage, font, a, R, W0, H0) {
     });
     return;
   }
+  a = sized(a, font);
   const { lines, lineHeight, boxHeight } = layoutNote(a, font);
 
   // An axis-aligned box in visual space stays axis-aligned in native
@@ -208,6 +229,7 @@ const r2 = (v) => Math.round(v * 100) / 100;
 
 /** The box a markup draws inside, in native page space. */
 function markupBounds(a, font, R, W0, H0) {
+  a = sized(a, font);
   const pts = [];
   let pad = BOUNDS_PAD;
   let inner = null;                       // the note's own box, for callouts
@@ -311,8 +333,9 @@ async function attachMarkup(outDoc, pdfPage, font, a, R, W0, H0, serial) {
       RD: [r2(inner.left - box.left), r2(inner.bottom - box.bottom), r2(box.right - inner.right), r2(box.top - inner.top)],
     });
     if (a.type === 'callout') {
-      const { boxHeight } = layoutNote(a, font);
-      const at = computeAttachPoint(a, boxHeight);
+      const drawn = sized(a, font);
+      const { boxHeight } = layoutNote(drawn, font);
+      const at = computeAttachPoint(drawn, boxHeight);
       const tip = toNative(R, W0, H0, a.tipX, a.tipY);
       const end = toNative(R, W0, H0, at.x, at.y);
       Object.assign(dict, { IT: 'FreeTextCallout', CL: [r2(tip.x), r2(tip.y), r2(end.x), r2(end.y)], LE: 'OpenArrow' });
@@ -334,6 +357,7 @@ function markupPayload(a, R) {
     // Written only when it is off, so a file saved before notes had the
     // option reads back the way it was drawn: filled.
     if (a.fill === false) p.fill = false;
+    if (a.fit) p.fit = true;
   }
   return p;
 }
@@ -367,7 +391,7 @@ function readPayload(p) {
   if (p.type !== 'text' && p.type !== 'callout') return null;
   if (!fin(p.x) || !fin(p.y) || !fin(p.width, 1) || !fin(p.fontSize, 2, 400)) return null;
   if (typeof p.text !== 'string' || p.text.length > 50000) return null;
-  const markup = { type: p.type, x: p.x, y: p.y, width: p.width, text: p.text, fontSize: p.fontSize, color: p.color, fill: p.fill !== false };
+  const markup = { type: p.type, x: p.x, y: p.y, width: p.width, text: p.text, fontSize: p.fontSize, color: p.color, fill: p.fill !== false, fit: p.fit === true };
   if (p.type === 'callout') {
     if (!fin(p.tipX) || !fin(p.tipY)) return null;
     markup.tipX = p.tipX;

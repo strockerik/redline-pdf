@@ -592,7 +592,7 @@ def surface_checks(ws):
         tool: state.activeTool, sel: state.selectedAnnoId, dirty: state.dirty,
         pages: state.pages.length, page: state.pages.indexOf(p), rot: p ? p.rotation : null,
         annos: p ? p.annotations.map((a) => ({ id: a.id, type: a.type, text: a.text, x: a.x, y: a.y,
-          width: a.width, fill: a.fill, size: a.size, color: a.color, points: a.points })) : [],
+          width: a.width, fill: a.fill, fit: a.fit, size: a.size, color: a.color, points: a.points })) : [],
         hist: historyStatus(), name: state.docName,
         chip: document.getElementById('saveChipText').textContent,
         chipShown: !document.getElementById('saveChip').hidden,
@@ -721,7 +721,48 @@ def surface_checks(ws):
     tap(*stage_point(ws, 0.12, 0.62))
     check("mid-callout, the next step is said where the pointer is",
           shown("placeHint") and "note itself" in ev(ws, "document.getElementById('placeHint').textContent"))
-    tap(*stage_point(ws, 0.3, 0.5)); typed("One")
+
+    # Between the two clicks the whole callout is drawn, following the
+    # pointer: leader, arrowhead and the note's outline.
+    PREVIEW = """(() => {
+      const vis = (el) => !!el && el.style.display !== 'none';
+      const dot = document.querySelector('circle.callout-preview');
+      const lines = [...document.querySelectorAll('line.callout-preview')];
+      const box = document.querySelector('.note-ghost.callout-preview');
+      const c = document.getElementById('pageCanvas').getBoundingClientRect();
+      const n = (el, k) => Number(el.getAttribute(k));
+      return {
+        dot: vis(dot), lines: lines.filter(vis).length, box: vis(box),
+        tip: lines[0] ? [n(lines[0], 'x2') + c.left, n(lines[0], 'y2') + c.top] : null,
+        from: lines[0] ? [n(lines[0], 'x1'), n(lines[0], 'y1')] : null,
+        boxAt: box ? [box.getBoundingClientRect().left, box.getBoundingClientRect().top] : null,
+        hit: box ? getComputedStyle(box).pointerEvents : null,
+      };
+    })()"""
+    tip_at, box_at = stage_point(ws, 0.12, 0.62), stage_point(ws, 0.3, 0.5)
+    pv = ev(ws, PREVIEW)
+    check("the first click marks the tip", pv["dot"] is True and pv["lines"] == 0, str(pv))
+    for i in range(1, 7):
+        ws.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "button": "none", "buttons": 0,
+                "x": tip_at[0] + (box_at[0] - tip_at[0]) * i / 6, "y": tip_at[1] + (box_at[1] - tip_at[1]) * i / 6})
+        time.sleep(0.02)
+    pv = ev(ws, PREVIEW)
+    check("moving the pointer draws the whole leader, with its arrowhead and the note's outline",
+          pv["lines"] == 3 and pv["box"] is True and pv["dot"] is False, str(pv))
+    check("the leader ends on the tip, and the outline sits at the pointer",
+          abs(pv["tip"][0] - tip_at[0]) < 1.5 and abs(pv["tip"][1] - tip_at[1]) < 1.5
+          and abs(pv["boxAt"][0] - box_at[0]) < 1.5 and abs(pv["boxAt"][1] - box_at[1]) < 1.5, str(pv))
+    check("and nothing in the preview is in the way of the second click", pv["hit"] == "none")
+    shot(ws, "09a-callout-preview")
+    tap(*box_at)
+    placed = ev(ws, """(() => {
+      const l = [...document.querySelectorAll('#leaderSvg line')].find((n) => !n.classList.contains('callout-preview'));
+      return { from: [Number(l.getAttribute('x1')), Number(l.getAttribute('y1'))], preview: document.querySelectorAll('.callout-preview').length };
+    })()""")
+    check("the callout that is placed is the one that was shown",
+          abs(placed["from"][0] - pv["from"][0]) < 1.5 and abs(placed["from"][1] - pv["from"][1]) < 1.5, f"{placed['from']} vs {pv['from']}")
+    check("and the preview is gone", placed["preview"] == 0)
+    typed("One")
     tap(*stage_point(ws, 0.9, 0.9))                    # ends the typing
     tap(*stage_point(ws, 0.5, 0.62)); tap(*stage_point(ws, 0.68, 0.5)); typed("Two")
     tap(*stage_point(ws, 0.9, 0.9))                    # a note keeps its text when it loses focus
@@ -982,6 +1023,65 @@ def surface_checks(ws):
       + '|' + document.getElementById('colorGrp').getAttribute('aria-label')
       + '|' + document.getElementById('penSizeGrp').getAttribute('aria-label')""")
     check("colours and weights are named, not numbered", names.startswith("Red,Black,Blue,Green,Purple,Amber|Colour|Line weight"), names)
+
+    # --- ⌘Return finishes a note; a note can shrink to its text ---
+    click(ws, "#toolText")
+    tap(*stage_point(ws, 0.6, 0.4))
+    typed("Fit me")
+    key(ws, "Enter", "Enter", 13, meta=True)
+    s = st()
+    note = s["annos"][-1]
+    check("⌘Return finishes the note without a click", note["text"] == "Fit me"
+          and ev(ws, "!!document.querySelector('.anno-box.editing')") is False
+          and ev(ws, "document.activeElement.classList.contains('anno-text')") is False, str(note))
+    check("and leaves the tool in hand, with the note selected", s["tool"] == "text" and s["sel"] == note["id"], f"{s['tool']}, sel {s['sel']}")
+    check("a note starts at a fixed width, with the option to shrink it", note["width"] == 170 and note["fit"] is False
+          and shown("fitGrp") and ev(ws, "document.getElementById('fitToggle').checked") is False)
+
+    BOX = """(() => {
+      const b = document.querySelector('.anno-box.selected'), t = b.querySelector('.anno-text');
+      return { w: b.offsetWidth, textW: t.scrollWidth, h: b.offsetHeight, fit: b.classList.contains('fit') };
+    })()"""
+    wide = ev(ws, BOX)
+    click(ws, "#fitToggle")
+    scale = ev(ws, "(async()=>(await import('./js/state.js')).state.currentScale)()", awaitp=True)
+    s, tight = st(), ev(ws, BOX)
+    note = next(a for a in s["annos"] if a["id"] == note["id"])
+    check("Shrink to text pulls the box in to the width of its words", note["fit"] is True and tight["fit"]
+          and tight["w"] < wide["w"] * 0.6 and tight["w"] - tight["textW"] <= 4, f"{wide} -> {tight}")
+    check("and the note knows its new width", abs(note["width"] - tight["w"] / scale) < 0.5, f"{note['width']} vs {tight['w'] / scale}")
+    check("as one step to undo", s["hist"]["undoLabel"] == "Change style")
+    nx, ny = to_client(note["x"] + 8, note["y"] + 8)
+    tap(nx, ny)                                       # already selected: this opens it
+    typed(" and now it is longer")
+    grown_live = ev(ws, BOX)
+    key(ws, "Enter", "Enter", 13, meta=True)
+    grown = next(a for a in st()["annos"] if a["id"] == note["id"])
+    check("it grows with the text as it is typed, on one line", grown_live["w"] > tight["w"] * 2 and grown_live["h"] == tight["h"],
+          f"{tight} -> {grown_live}")
+    check("and keeps up in the model", abs(grown["width"] - grown_live["w"] / scale) < 0.5 and grown["fit"] is True)
+    rz = ev(ws, "(r => ({x: r.left + r.width / 2, y: r.top + r.height / 2}))(document.querySelector('.anno-box.selected .anno-resize').getBoundingClientRect())")
+    drag((rz["x"], rz["y"]), (rz["x"] - 60, rz["y"]))
+    sized = next(a for a in st()["annos"] if a["id"] == note["id"])
+    check("dragging its edge takes the width back by hand", sized["fit"] is False and abs(sized["width"] - (grown["width"] - 60 / scale)) < 1
+          and ev(ws, "document.getElementById('fitToggle').checked") is False and ev(ws, BOX)["h"] > tight["h"],
+          f"{sized['width']} vs {grown['width'] - 60 / scale}")
+    undo()
+    again = next(a for a in st()["annos"] if a["id"] == note["id"])
+    check("which undo gives back", again["fit"] is True)
+    # The choice carries to the next note, as colour and fill do.
+    tap(nx, ny)
+    click(ws, "#fitToggle"); click(ws, "#fitToggle")
+    tap(*stage_point(ws, 0.63, 0.58))                 # clear of the note above and the callouts either side
+    typed("ok")
+    key(ws, "Enter", "Enter", 13, meta=True)
+    nxt = st()["annos"][-1]
+    check("the next note placed shrinks too", nxt["text"] == "ok" and nxt["fit"] is True and nxt["width"] < 60, str(nxt))
+    click(ws, "#fitToggle")
+    check("until the option is turned off", ev(ws, "(async()=>(await import('./js/state.js')).state.currentFit)()", awaitp=True) is False
+          and st()["annos"][-1]["fit"] is False)
+    esc()
+    shot(ws, "09b-shrunk")
 
     # --- the save state, in words; a failed save, in the way ---
     s = st()
@@ -1540,7 +1640,7 @@ def main():
           const sw = await (await fetch('./sw.js')).text();
           return { text: el.textContent.trim(), shown: el.getBoundingClientRect().width > 0,
                    empty: document.getElementById('emptyStamp').textContent.trim(),
-                   cache: (sw.match(/const CACHE = 'redline-v(\\d+)'/) || [])[1] };
+                   cache: (sw.match(/const CACHE = 'redline-v(\\d+\\.\\d+)'/) || [])[1] };
         })()""", awaitp=True)
         check("build stamp on screen", stamp["shown"] and stamp["text"].startswith("rev "), stamp["text"])
         check("build stamp names the service worker's cache", stamp["text"].startswith(f"rev {stamp['cache']} "),

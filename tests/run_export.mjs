@@ -313,7 +313,7 @@ try {
     check('and left in the file rather than deleted', loaded.getPage(0).node.Annots().size() === hostile.length - 1);
     const m = got[0] ? got[0].markup : {};
     check('an accepted one carries only the fields a markup has',
-      Object.keys(m).sort().join() === 'color,fill,fontSize,text,type,width,x,y' && ({}).polluted === undefined, Object.keys(m).join());
+      Object.keys(m).sort().join() === 'color,fill,fit,fontSize,text,type,width,x,y' && ({}).polluted === undefined, Object.keys(m).join());
   }
 
   // --- 14. Highlight, arrow, box and cloud are point shapes like ink ---
@@ -414,6 +414,78 @@ try {
     check('a note saved before the option existed comes back filled', marks().every((m) => m.fill === undefined)
       && (takeMarkups(await PDFDocument.load(editable)).get(0) || []).filter((t) => t.markup.type !== 'ink').every((t) => t.markup.fill === true));
   }
+}
+
+// --- 16. A note that shrinks to its text ---
+// Its width in the file comes from the PDF font, not from the screen:
+// the same words in the system font are a slightly different length, and
+// carrying that width over would leave a gap or wrap the last word.
+{
+  const { PDFName, PDFDict, PDFArray, StandardFonts, decodePDFRawStream } = globalThis.PDFLib;
+  const N = (k) => PDFName.of(k);
+  const near = (a, b, eps = 0.02) => Math.abs(a - b) <= eps;
+  const text = (u8) => { let t = ''; for (let i = 0; i < u8.length; i++) t += String.fromCharCode(u8[i]); return t; };
+  const content = (page) => {
+    const c = page.node.Contents();
+    const streams = c instanceof PDFArray ? Array.from({ length: c.size() }, (_, i) => c.lookup(i)) : [c];
+    return streams.map((st) => text(st.dict.has(N('Filter')) ? decodePDFRawStream(st).decode() : st.getUnencodedContents())).join('\n');
+  };
+  const ours = (page) => {
+    const an = page.node.Annots();
+    return an ? Array.from({ length: an.size() }, (_, i) => an.lookup(i, PDFDict)).filter((d) => d.has(N('RedlineMarkup'))) : [];
+  };
+  const probe = await PDFDocument.create();
+  const helv = await probe.embedFont(StandardFonts.Helvetica);
+  const words = 'CHECK PANEL COUNT AT GRID 4', second = 'short';
+  const want = helv.widthOfTextAtSize(words, 12) + 12;          // + padding either side
+
+  // On screen it was 300pt wide (a different font's idea of these words);
+  // a fixed-width note that narrow would wrap them.
+  const note = (over) => ({ id: 1, type: 'text', x: 40, y: 60, width: 300, text: `${words}\n${second}`, fontSize: 12, color: '#b23a3a', fit: true, ...over });
+  // The box is the first path painted: its x extent is the note's width.
+  const boxX = (c) => {
+    const path = c.slice(0, c.search(/\n[BSf]\n/));
+    const xs = [...path.matchAll(/([\d.-]+) [\d.-]+ [ml]\n/g)].map((m) => Number(m[1]));
+    // pdf-lib moves the origin to the box's corner, then draws from zero.
+    const at = path.match(/1 0 0 1 ([\d.-]+) [\d.-]+ cm/);
+    return { left: (at ? Number(at[1]) : 0) + Math.min(...xs), width: Math.max(...xs) - Math.min(...xs) };
+  };
+  const paint = async (a) => {
+    S.pages = [{ id: 1, kind: 'imported', sourceId: 1, sourcePageIndex: 0, W0: 612, H0: 792, rotation: 0, annotations: [a] }];
+    return content((await PDFDocument.load(await buildPdfBytes({ flatten: true }))).getPage(0));
+  };
+
+  const fitted = await paint(note());
+  const lines = (fitted.match(/Tj/g) || []).length;
+  check('a shrunk note keeps the lines that were typed', lines === 2, `${lines} lines`);
+  const box = boxX(fitted);
+  check('and its box is as wide as its longest line in the PDF font', near(box.width, want, 0.05), `${box.width} vs ${want}`);
+  check('starting from the same left edge', near(box.left, 40), String(box.left));
+
+  const squeezed = await paint(note({ width: 60 }));
+  check('whatever width the screen had settled on', (squeezed.match(/Tj/g) || []).length === 2
+    && near(boxX(squeezed).width, want, 0.05), String(boxX(squeezed).width));
+  const fixed = await paint(note({ width: 60, fit: false }));
+  check('where a fixed-width note that narrow wraps', (fixed.match(/Tj/g) || []).length > 2, `${(fixed.match(/Tj/g) || []).length} lines`);
+
+  // The leader leaves from the edge of the box as drawn, not as it was on screen.
+  S.pages = [{ id: 1, kind: 'imported', sourceId: 1, sourcePageIndex: 0, W0: 612, H0: 792, rotation: 0,
+    annotations: [{ ...note({ width: 300 }), type: 'callout', tipX: 500, tipY: 66 }] }];
+  const doc = await PDFDocument.load(await buildPdfBytes());
+  const an = ours(doc.getPage(0))[0];
+  const cl = an.lookup(N('CL')).asArray().map((n) => n.asNumber());
+  check('a shrunk callout\'s leader leaves from the edge of the box as drawn', near(cl[2], 40 + want, 0.05), `${cl[2]} vs ${40 + want}`);
+  const rect = an.lookup(N('Rect')).asArray().map((n) => n.asNumber());
+  check('and its rectangle holds the box and the tip', rect[0] <= 40 && rect[2] >= 500);
+  const back = takeMarkups(doc).get(0)[0].markup;
+  check('the choice survives a save', back.fit === true && back.text === `${words}\n${second}`);
+  S.pages = [{ id: 1, kind: 'imported', sourceId: 1, sourcePageIndex: 0, W0: 612, H0: 792, rotation: 0, annotations: [note({ fit: false })] }];
+  const plain = takeMarkups(await PDFDocument.load(await buildPdfBytes())).get(0)[0].markup;
+  check('and a note saved without it comes back fixed-width', plain.fit === false && near(plain.width, 300));
+
+  // Turning the page must not treat it as wrapped either.
+  const { estimateBoxHeight, LINE_HEIGHT_MULT, ANNO_PAD } = stateMod;
+  check('its height is its typed lines, for rotation too', near(estimateBoxHeight(note({ width: 20 })), 2 * 12 * LINE_HEIGHT_MULT + ANNO_PAD * 2));
 }
 
 print(failures ? `\n${failures} FAILURE(S)` : '\nAll export checks passed');

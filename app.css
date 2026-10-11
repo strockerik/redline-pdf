@@ -626,6 +626,13 @@ select, input[type=text]{
   touch-action:none;
 }
 .anno-box.no-fill{ background:transparent; }
+/* Shrunk to its text: as wide as the longest line typed, and no line
+   breaks but the ones typed. */
+.anno-box.fit{ width:max-content; }
+.anno-box.fit .anno-text{ white-space:pre; }
+/* A callout between its two clicks (annots.js, showCalloutPreview). */
+circle.callout-preview, line.callout-preview{ pointer-events:none; opacity:0.75; }
+.note-ghost.callout-preview{ background:rgba(255,255,255,0.6); }
 .anno-box.selected{ box-shadow:0 0 0 2px rgba(0,0,0,0.18); z-index:5; }
 .anno-text{
   outline:none;

@@ -21,8 +21,11 @@ and it works with no network connection once installed.
 - **Mark up** — text boxes, callouts with a leader, a freehand pen, a
   highlighter, arrows, boxes and revision clouds. Six colours, six text
   sizes, three line weights. A tool stays in hand until you put it away
-  (Esc), so twenty callouts are twenty placements. Notes get a white fill
-  so they read over dense linework; ⌘D duplicates one, ⌘C / ⌘V carries it
+  (Esc), so twenty callouts are twenty placements. A callout shows its
+  whole leader between the two clicks, so you can see how it will sit
+  before you commit. Notes get a white fill so they read over dense
+  linework, and can shrink to the width of their text; ⌘Return finishes
+  one without reaching for the mouse, ⌘D duplicates it, ⌘C / ⌘V carries it
   to another sheet.
 - **Undo** — ⌘Z takes back anything: a stroke, a move, an edit, a rotated
   or deleted page, even Clear All. Nothing asks "are you sure?".
@@ -78,6 +81,7 @@ sheet, and saving downloads to the Files app.
 | ⌘S | Save over the opened file |
 | ⇧⌘S | Save As |
 | ⌘Z / ⇧⌘Z | Undo / redo |
+| ⌘Return | Finish typing a note, keeping the tool |
 | ⌘D | Duplicate the selected markup |
 | ⌘C / ⌘V | Copy the selected markup / paste it on this page |
 | ⌘+ / ⌘− | Zoom in / out |
@@ -218,6 +222,8 @@ attaches to — in visual space, where it's ordinary 2D math. Convert only
 at the final draw call. `docs/build-guide.md` §3 has the full reasoning.
 
 ### Deploying
+
+Builds are numbered `rev 0.N` — the footer shows which one is running.
 
 Push to `main`; GitHub Pages serves the repo root. Bump `CACHE` in
 `sw.js` on every deploy or the service worker will keep serving the old

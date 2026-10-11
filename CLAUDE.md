@@ -158,10 +158,13 @@ error that only shows up on 90°/270° pages and is miserable to eyeball.
   its own `bytes.slice(0)`.
 - **Bump `CACHE` in `sw.js` on every deploy, and the build stamp with
   it.** Otherwise the installed app keeps serving the previous version
-  from cache. The stamp is the `#buildStamp` line in index.html — `rev N ·
-  date · what changed`, where N is the CACHE number — and is what the user
-  compares against the repo to see whether a running copy is current.
-  `tests/analyze.py` fails if the two numbers disagree.
+  from cache. The stamp is the `#buildStamp` line in index.html —
+  `rev 0.N · date · what changed`, the same number as CACHE
+  (`redline-v0.N`) — and is what the user compares against the repo to see
+  whether a running copy is current. `tests/analyze.py` fails if the two
+  disagree. **Everything so far is rev 0**: a deploy takes 0.21 to 0.22.
+  The number before the point is the owner's to change; never bump it
+  unasked. (Builds up to 0.21 were stamped as bare integers, "rev 21".)
 - **All paths must stay relative (`./`).** Pages serves from
   `/redline-pdf/`, so an absolute `/js/...` works locally and 404s in
   production.
@@ -208,6 +211,12 @@ error that only shows up on 90°/270° pages and is miserable to eyeball.
   fit mode the user last *chose*; `zoomMode` flips to `'custom'` the moment
   anything zooms, so reading it there would make one wheel-zoom in Fit W
   silently change what the wheel does next.
+- **A note with `fit: true` has no width of its own.** It shrinks to its
+  text: on screen the browser lays it out and `a.width` follows
+  (`syncFit`), and in the file export.js sizes it from the PDF font
+  (`sized`). The two widths differ by a few points because the fonts do —
+  don't "fix" that by carrying one over to the other, or the text gains a
+  gap or a wrapped last word.
 - **Tools stay armed** until Esc, Select, or the same tool again. A click
   that only ends typing in a note must not place another one.
 - **The properties row has a fixed height** and shows only what applies.
@@ -243,7 +252,7 @@ change.
 
 Shipped since: freehand ink, then document tabs (see the architecture
 note above — the rest of the app never learned about them), then the
-rev 20 redesign from the UX review in `.ux-review/` (gitignored): undo
+rev 0.20 redesign from the UX review in `.ux-review/` (gitignored): undo
 and redo, tools that stay armed, highlight / arrow / box / cloud, one
 Save with the other file commands behind it, the page field, the markups
 list, note fill, duplicate and copy/paste, and the save chip and alert.

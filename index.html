@@ -166,6 +166,10 @@
           <input type="checkbox" id="fillToggle" checked>
           <span>White fill behind text</span>
         </label>
+        <label class="check-chip" id="fitGrp" hidden title="Keep the box as wide as its text, and no wider">
+          <input type="checkbox" id="fitToggle">
+          <span>Shrink to text</span>
+        </label>
         <button id="btnDuplicate" hidden title="Make a second copy of the selected markup (⌘D)">Duplicate <kbd>⌘D</kbd></button>
         <button id="btnDeleteAnno" class="danger-ghost" hidden disabled title="Delete the selected markup (Delete)">Delete</button>
         <span id="armedNote" class="armed" hidden>
@@ -203,12 +207,14 @@
       <div id="footerNote">
         <span>Runs entirely on this device · nothing uploads · documents close with the app, so save before you quit</span>
         <!-- Which build this is. The number is the service worker's CACHE
-             version (sw.js); bump both together on every deploy, and put
+             version (sw.js), written major.build: everything so far is
+             rev 0, so a deploy takes 0.21 to 0.22, and the 0 changes only
+             when the owner says it does. Bump both together on every deploy, and put
              today's date and a few words on what changed. If the page
              shows an older line than this file does, the installed app is
              still serving a cached copy. tests/analyze.py checks the two
              numbers agree. -->
-        <span id="buildStamp">rev 21 · 2026-10-11 · undo never changes which file Save writes to</span>
+        <span id="buildStamp">rev 0.22 · 2026-10-11 · callout preview, shrink to text, ⌘Return finishes a note</span>
       </div>
     </div>
 
@@ -260,6 +266,7 @@
           <div><dt><kbd>⇧⌘Z</kbd></dt><dd>Redo</dd></div>
           <div><dt><kbd>⌘D</kbd></dt><dd>Duplicate the selected markup</dd></div>
           <div><dt><kbd>⌘C / ⌘V</kbd></dt><dd>Copy the selected markup / paste it on this page</dd></div>
+          <div><dt><kbd>⌘Return</kbd></dt><dd>Finish typing a note, keeping the tool</dd></div>
           <div><dt><kbd>Delete</kbd></dt><dd>Delete the selected markup</dd></div>
           <div><dt><kbd>Esc</kbd></dt><dd>Put the tool away, deselect</dd></div>
         </dl>

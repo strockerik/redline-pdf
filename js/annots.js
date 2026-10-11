@@ -48,6 +48,7 @@ const colourFor = (type) => (type === 'highlight' ? state.currentHighlightColor 
 // ============================================================
 export function renderAnnotationLayer(page) {
   const overlay = $('annoLayer');
+  clearCalloutPreview();
   overlay.querySelectorAll('.anno-box').forEach((n) => n.remove());
   $('leaderSvg').replaceChildren();
   $('hiliteSvg').replaceChildren();
@@ -67,10 +68,11 @@ function buildNoteDom(page, a) {
 
   const box = document.createElement('div');
   box.className = 'anno-box' + (a.id === state.selectedAnnoId ? ' selected' : '')
-    + (a.fill === false ? ' no-fill' : '');
+    + (a.fill === false ? ' no-fill' : '') + (a.fit ? ' fit' : '');
   box.style.left = (a.x * scale) + 'px';
   box.style.top = (a.y * scale) + 'px';
-  box.style.width = (a.width * scale) + 'px';
+  // One that shrinks to its text is given no width: the text sets it.
+  if (!a.fit) box.style.width = (a.width * scale) + 'px';
   box.style.borderColor = a.color;
 
   const text = document.createElement('div');
@@ -117,9 +119,18 @@ function buildNoteDom(page, a) {
   }
 
   state.domRefs[a.id] = { boxEl: box, textEl: text, lineEl, wing1, wing2, tipHandle };
+  syncFit(a, box);
   updateLeaderVisual(page, a);
 
   wireNoteInteractions(page, a, { box, text, resize, del, tipHandle });
+}
+
+/** A note that shrinks to its text has no width of its own: the browser
+ *  lays it out, and the model follows — so a leader knows where the box's
+ *  edge is, and a later resize starts from what is on screen. Derived, so
+ *  it is not a change to undo or to save. */
+function syncFit(a, box) {
+  if (a.fit && box.offsetWidth) a.width = box.offsetWidth / state.currentScale;
 }
 
 // Notes placed and not yet typed into. Placing one and typing its first
@@ -198,6 +209,7 @@ function wireNoteInteractions(page, a, els) {
     }
     a.text = typed;
     text.classList.remove('placeholder');
+    syncFit(a, box);
     if (typed !== before) {
       if (!wasFresh && was) commit(was, 'Edit note');
       markDirty();
@@ -208,7 +220,19 @@ function wireNoteInteractions(page, a, els) {
 
   text.addEventListener('input', () => {
     text.classList.toggle('placeholder', text.innerText.trim().length === 0);
+    syncFit(a, box);
     updateLeaderVisual(page, a);
+  });
+
+  // ⌘Return finishes the note from the keyboard. Return alone is a new
+  // line, and Esc also puts the tool away; this is the one that leaves
+  // the tool in hand, ready for the next note.
+  text.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      e.stopPropagation();
+      text.blur();
+    }
   });
 
   // Notes are plain text; pasted markup can't survive the export path.
@@ -292,6 +316,9 @@ function startResize(e, page, a, boxEl) {
     if (!moved && Math.abs(ev.clientX - startX) < DRAG_SLOP) return;
     if (!moved) checkpoint('Resize note');
     moved = true;
+    // Dragging the edge is choosing a width, which is the opposite of
+    // letting the text choose it.
+    if (a.fit) { a.fit = false; boxEl.classList.remove('fit'); }
     a.width = Math.max(MIN_NOTE_WIDTH, origW + (ev.clientX - startX) / scale);
     boxEl.style.width = (a.width * scale) + 'px';
     updateLeaderVisual(page, a);
@@ -301,7 +328,7 @@ function startResize(e, page, a, boxEl) {
     handle.removeEventListener('pointerup', onUp);
     handle.removeEventListener('pointercancel', onUp);
     try { handle.releasePointerCapture(ev.pointerId); } catch { /* already released */ }
-    if (moved) markDirty();
+    if (moved) { markDirty(); updateToolbarState(); }
   };
   handle.addEventListener('pointermove', onMove);
   handle.addEventListener('pointerup', onUp);
@@ -590,6 +617,9 @@ export function installDrawing() {
   });
 
   layer.addEventListener('pointermove', (e) => {
+    // Between a callout's two clicks, show what a click here would make.
+    // (A finger does not hover, so there the tip alone stays marked.)
+    if (!live && state.pendingCalloutTip && e.pointerType !== 'touch') showCalloutPreview(pointAt(e));
     if (!live || e.pointerId !== live.pointerId) return;
     e.preventDefault();
     const p = pointAt(e);
@@ -660,6 +690,7 @@ function beginNoteDrag(e, page) {
       type: 'text',
       x: Math.min(start.x, p.x), y: start.y,
       width: Math.max(MIN_NOTE_WIDTH, Math.abs(p.x - start.x)),
+      fit: false,              // a width was just chosen by hand
     });
   });
 }
@@ -688,6 +719,7 @@ export function handleLayerClick(e) {
   } else if (tool === 'callout') {
     if (!state.pendingCalloutTip) {
       state.pendingCalloutTip = p;
+      showCalloutPreview(null);
       $('placeHint').textContent = 'Now tap where the note itself should sit.';
       // Mid-gesture, so it shows wherever the properties row can be seen too.
       $('placeHint').classList.add('step');
@@ -703,6 +735,82 @@ export function handleLayerClick(e) {
   }
 }
 
+// ---- callout preview ----
+let preview = null;       // { dot, line, wing1, wing2, box } while a callout is half placed
+
+function clearCalloutPreview() {
+  if (!preview) return;
+  for (const el of Object.values(preview)) el.remove();
+  preview = null;
+}
+
+/** How wide the note a click would make starts out. */
+function newNoteWidth() {
+  // A note that shrinks to its text opens at the width of its placeholder.
+  return state.currentFit ? state.currentFontSize * 5.2 + ANNO_PAD * 2 : DEFAULT_BOX_WIDTH;
+}
+
+/** Between a callout's two clicks: the leader, its arrowhead and the
+ *  note's outline, following the pointer. Drawn with the same geometry
+ *  the placed callout uses — which edge the leader leaves from, where the
+ *  head points — so what is shown is what a click at `p` would make.
+ *  With no `p` yet (the first click has only just landed) the tip alone
+ *  is marked. */
+function showCalloutPreview(p) {
+  const tip = state.pendingCalloutTip;
+  if (!tip) return;
+  const scale = state.currentScale;
+  const colour = state.currentColor;
+
+  if (!preview || !preview.dot.isConnected) {
+    clearCalloutPreview();
+    const svg = $('leaderSvg');
+    const mk = (tag) => {
+      const el = document.createElementNS(SVG_NS, tag);
+      el.setAttribute('class', 'callout-preview');
+      svg.appendChild(el);
+      return el;
+    };
+    const dot = mk('circle');
+    dot.setAttribute('r', '3.5');
+    const lines = [mk('line'), mk('line'), mk('line')];
+    for (const l of lines) {
+      l.setAttribute('stroke-width', '1.6');
+      l.setAttribute('stroke-linecap', 'round');
+    }
+    const box = document.createElement('div');
+    box.className = 'note-ghost callout-preview';
+    $('annoLayer').appendChild(box);
+    preview = { dot, line: lines[0], wing1: lines[1], wing2: lines[2], box };
+  }
+  preview.dot.setAttribute('fill', colour);
+  preview.dot.setAttribute('cx', tip.x * scale);
+  preview.dot.setAttribute('cy', tip.y * scale);
+
+  const show = (el, on) => { el.style.display = on ? '' : 'none'; };
+  for (const k of ['line', 'wing1', 'wing2', 'box']) show(preview[k], !!p);
+  show(preview.dot, !p);
+  if (!p) return;
+
+  const a = { x: p.x, y: p.y, width: newNoteWidth(), tipX: tip.x, tipY: tip.y };
+  const height = state.currentFontSize * LINE_HEIGHT_MULT + ANNO_PAD * 2;
+  const attach = computeAttachPoint(a, height);
+  const [w1, w2] = computeArrowWings(attach, tip);
+  const seg = (el, from, to) => {
+    el.setAttribute('stroke', colour);
+    el.setAttribute('x1', from.x * scale); el.setAttribute('y1', from.y * scale);
+    el.setAttribute('x2', to.x * scale); el.setAttribute('y2', to.y * scale);
+  };
+  seg(preview.line, attach, tip);
+  seg(preview.wing1, tip, w1);
+  seg(preview.wing2, tip, w2);
+  preview.box.style.borderColor = colour;
+  preview.box.style.left = (a.x * scale) + 'px';
+  preview.box.style.top = (a.y * scale) + 'px';
+  preview.box.style.width = (a.width * scale) + 'px';
+  preview.box.style.height = (height * scale) + 'px';
+}
+
 function placeNote(page, props) {
   const a = {
     id: state.nextAnnoId++,
@@ -711,6 +819,7 @@ function placeNote(page, props) {
     fontSize: state.currentFontSize,
     color: state.currentColor,
     fill: state.currentFill,
+    fit: state.currentFit,
     ...props,
   };
   checkpoint('Add note');
@@ -857,6 +966,7 @@ export function setActiveTool(tool) {
   if (!TOOL_BUTTON[tool]) tool = 'select';
   state.activeTool = tool;
   state.pendingCalloutTip = null;
+  clearCalloutPreview();
 
   for (const [name, id] of Object.entries(TOOL_BUTTON)) {
     const btn = $(id);
@@ -879,7 +989,7 @@ export function setActiveTool(tool) {
 
 /** Apply a style to the current selection, or set the default for the
  *  next placement when nothing is selected. */
-export function applyAnnoStyle({ color, fontSize, penSize, fill }) {
+export function applyAnnoStyle({ color, fontSize, penSize, fill, fit }) {
   const page = currentPage();
   const a = page?.annotations.find((x) => x.id === state.selectedAnnoId);
   const type = a ? a.type : TOOL_TYPE[state.activeTool];
@@ -890,6 +1000,7 @@ export function applyAnnoStyle({ color, fontSize, penSize, fill }) {
   if (fontSize) state.currentFontSize = fontSize;
   if (penSize) state.currentPenSize = penSize;
   if (fill !== undefined) state.currentFill = fill;
+  if (fit !== undefined) state.currentFit = fit;
   if (!a) { updateToolbarState(); return; }
 
   // Each property only means something to one family.
@@ -899,6 +1010,8 @@ export function applyAnnoStyle({ color, fontSize, penSize, fill }) {
   if (fontSize && !shape && fontSize !== a.fontSize) next.fontSize = fontSize;
   if (penSize && shape && sizeForType(a.type, penSize) !== a.size) next.size = sizeForType(a.type, penSize);
   if (fill !== undefined && !shape && fill !== (a.fill !== false)) next.fill = fill;
+  // Turned off, the note keeps the width it had shrunk to — as a fixed one.
+  if (fit !== undefined && !shape && fit !== (a.fit === true)) next.fit = fit;
   if (!Object.keys(next).length) { updateToolbarState(); return; }
 
   checkpoint('Change style');

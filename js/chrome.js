@@ -162,6 +162,7 @@ function refreshProps() {
   show($('penSizeGrp'), isShape);
   show($('colorGrp'), !!type);
   show($('fillGrp'), isNote);
+  show($('fitGrp'), isNote);
   show($('btnDuplicate'), !!sel);
   show($('btnDeleteAnno'), !!sel);
   $('btnDeleteAnno').disabled = !sel;
@@ -198,6 +199,7 @@ function refreshProps() {
   });
 
   $('fillToggle').checked = sel && isNote ? sel.fill !== false : state.currentFill;
+  $('fitToggle').checked = sel && isNote ? sel.fit === true : state.currentFit;
 }
 
 // ============================================================
@@ -466,6 +468,7 @@ export function installChrome() {
     e.target.blur();
   });
   $('fillToggle').addEventListener('change', (e) => applyAnnoStyle({ fill: e.target.checked }));
+  $('fitToggle').addEventListener('change', (e) => applyAnnoStyle({ fit: e.target.checked }));
   $('btnDuplicate').addEventListener('click', () => duplicateSelected());
   $('btnDeleteAnno').addEventListener('click', () => {
     const page = currentPage();

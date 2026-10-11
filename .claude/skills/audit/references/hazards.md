@@ -124,7 +124,7 @@ undo cannot reach — closing a tab or the window with unsaved work.
   undoing may report clean again (`adrift` in history.js).
 - **Undo may change the document, never which file ⌘S writes.** A
   checkpoint holds the name and file handle, because undoing a merge has
-  to bring them back. Rev 20 shipped with the consequence nobody traced:
+  to bring them back. Rev 0.20 shipped with the consequence nobody traced:
   open A, mark up, Save As B, mark up, undo twice — the second undo
   restored a checkpoint from before the Save As, and with it A's handle.
   ⌘S then overwrote A with a half-undone document. The only sign was the
@@ -149,7 +149,8 @@ undo cannot reach — closing a tab or the window with unsaved work.
 - **Bump `CACHE` in `sw.js`** whenever a precached file changes, or the
   installed app serves the previous version out of cache indefinitely.
 - **Bump the build stamp with it.** `#buildStamp` in index.html shows
-  `rev N · date · what changed` in the footer, N being the CACHE number.
+  `rev 0.N · date · what changed` in the footer, the same number CACHE
+  carries. A deploy raises N by one; the 0 changes only on the owner's word.
   It is how a stale installed copy is told from a current one, so a stamp
   left behind is worse than none.
 - **Keep PRECACHE complete.** `js/tabs.js` shipped missing from it: fine
