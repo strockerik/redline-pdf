@@ -580,9 +580,9 @@ def markup_checks(ws):
 
 def surface_checks(ws):
     """The command surface, driven the way a person drives it: undo for
-    every action, tools that stay in hand, the four shape tools, one Save,
+    every action, tools that are used once, the four shape tools, one Save,
     a save state said in words, and a failed save that does not fade."""
-    print("\n=== undo, armed tools and the command surface ===")
+    print("\n=== undo, one-shot tools and the command surface ===")
 
     ST = """(async () => {
       const { state } = await import('./js/state.js');
@@ -661,9 +661,9 @@ def surface_checks(ws):
     check("the properties row is empty until there is something to style",
           shown("propsNone") and not shown("colorGrp") and not shown("fontSizeGrp") and not shown("penSizeGrp"))
 
-    # --- a tool stays in hand until it is put away ---
+    # --- a tool is used once, then goes back ---
     click(ws, "#toolText")
-    check("arming a tool brings its properties and says it is armed",
+    check("picking a tool brings its properties and says what it will do",
           shown("colorGrp") and shown("fontSizeGrp") and shown("fillGrp") and shown("armedNote") and not shown("penSizeGrp"))
     check("and says, once, what the tool does",
           "drag to set its width" in ev(ws, "document.getElementById('armedText').textContent") and not shown("placeHint"),
@@ -672,15 +672,23 @@ def surface_checks(ws):
           ev(ws, "document.querySelector('#pageToolbar .tools').getAttribute('role')") == "group")
     tap(*stage_point(ws, 0.2, 0.15))
     typed("First")
+    s = st()
+    check("placing a note puts the tool back, while the note is still being typed",
+          s["tool"] == "select" and len(s["annos"]) == 1 and ev(ws, "!!document.querySelector('.anno-box.editing')") is True
+          and ev(ws, "document.getElementById('toolText').classList.contains('toggled')") is False
+          and ev(ws, "document.getElementById('toolSelect').classList.contains('toggled')") is True and not shown("armedNote"),
+          f"{s['tool']}, {len(s['annos'])}")
     tap(*stage_point(ws, 0.7, 0.15))
     s = st()
-    check("placing a note leaves the text tool armed", s["tool"] == "text" and len(s["annos"]) == 1, f"{s['tool']}, {len(s['annos'])}")
-    check("the click that ended the typing did not place another", [a["text"] for a in s["annos"]] == ["First"], str(s["annos"]))
+    check("the click that ends the typing places nothing", [a["text"] for a in s["annos"]] == ["First"] and s["sel"] is None, str(s["annos"]))
+    tap(*stage_point(ws, 0.7, 0.15))
+    check("and neither does the one after it: the tool was used", len(st()["annos"]) == 1)
+    click(ws, "#toolText")
     tap(*stage_point(ws, 0.7, 0.15))
     typed("Second")
     esc()
     s = st()
-    check("the next click does", [a["text"] for a in s["annos"]] == ["First", "Second"] and s["tool"] == "select", str(s))
+    check("picking the tool again places the next", [a["text"] for a in s["annos"]] == ["First", "Second"] and s["tool"] == "select", str(s))
     check("placing and typing a note is one step to undo", s["hist"]["changes"] == 2, str(s["hist"]))
 
     click(ws, "#toolText")
@@ -776,12 +784,14 @@ def surface_checks(ws):
     check("from the middle of the side facing the tip", abs(jog["x1"] - jog["boxLeft"]) < 0.5 and abs(jog["y1"] - jog["boxMid"]) < 0.5 and jog["x2"] < jog["x1"], str(jog))
     check("and turns for the tip at the knee", abs(jog["x2"] - jog["kx"]) < 0.01 and abs(jog["y2"] - jog["ky"]) < 0.01)
     typed("One")
+    check("a placed callout puts its tool back too", st()["tool"] == "select" and not shown("placeHint"))
     tap(*stage_point(ws, 0.9, 0.9))                    # ends the typing
+    click(ws, "#toolCallout")
     tap(*stage_point(ws, 0.5, 0.62)); tap(*stage_point(ws, 0.68, 0.5)); typed("Two")
     tap(*stage_point(ws, 0.9, 0.9))                    # a note keeps its text when it loses focus
     s = st()
-    check("two callouts placed without going back to the toolbar",
-          [a["text"] for a in s["annos"] if a["type"] == "callout"] == ["One", "Two"] and s["tool"] == "callout", str(s["annos"]))
+    check("a second callout takes a second pick of the tool",
+          [a["text"] for a in s["annos"] if a["type"] == "callout"] == ["One", "Two"] and s["tool"] == "select", str(s["annos"]))
     esc()
 
     # --- highlight, arrow, box, cloud ---
@@ -802,12 +812,18 @@ def surface_checks(ws):
                inLeader: document.querySelectorAll('#leaderSvg .ink-stroke[stroke="#e3b505"]').length };
     })()""")
     check("it multiplies with the sheet instead of covering it", hl == {"n": 1, "blend": "multiply", "inLeader": 0}, str(hl))
-    check("the highlighter is still in hand", s["tool"] == "highlight" and s["label"] == "Highlight")
+    check("a drawing tool goes back after one use, leaving what it drew selected",
+          s["tool"] == "select" and s["sel"] == s["annos"][-1]["id"] and s["label"] == "Highlight"
+          and ev(ws, "document.querySelectorAll('.ink-halo').length") == 1, f"{s['tool']}, sel {s['sel']}, {s['label']}")
+    drag(stage_point(ws, 0.6, 0.42), stage_point(ws, 0.8, 0.42))
+    check("so a second drag draws nothing", len(st()["annos"]) == len(kinds), str(len(st()["annos"])))
+    click(ws, "#toolHighlight")
     check("a freehand tool is told to draw, not to place",
           ev(ws, "document.getElementById('armedText').textContent").startswith("draw"), ev(ws, "document.getElementById('armedText').textContent"))
     click(ws, "#toolArrow")
     tap(*stage_point(ws, 0.9, 0.3))
     check("a click with a two-point tool draws nothing", len(st()["annos"]) == len(kinds))
+    check("and leaves it in hand: it has not been used yet", st()["tool"] == "arrow")
     for k, code, vk, tool in (("h", "KeyH", 72, "highlight"), ("a", "KeyA", 65, "arrow"), ("r", "KeyR", 82, "rect"),
                               ("c", "KeyC", 67, "cloud"), ("v", "KeyV", 86, "select")):
         key(ws, k, code, vk)
@@ -1047,7 +1063,7 @@ def surface_checks(ws):
     check("⌘Return finishes the note without a click", note["text"] == "Fit me"
           and ev(ws, "!!document.querySelector('.anno-box.editing')") is False
           and ev(ws, "document.activeElement.classList.contains('anno-text')") is False, str(note))
-    check("and leaves the tool in hand, with the note selected", s["tool"] == "text" and s["sel"] == note["id"], f"{s['tool']}, sel {s['sel']}")
+    check("and leaves the note selected", s["tool"] == "select" and s["sel"] == note["id"], f"{s['tool']}, sel {s['sel']}")
     check("a note starts at a fixed width, with the option to shrink it", note["width"] == 170 and note["fit"] is False
           and shown("fitGrp") and ev(ws, "document.getElementById('fitToggle').checked") is False)
 
@@ -1085,6 +1101,7 @@ def surface_checks(ws):
     # The choice carries to the next note, as colour and fill do.
     tap(nx, ny)
     click(ws, "#fitToggle"); click(ws, "#fitToggle")
+    click(ws, "#toolText")
     tap(*stage_point(ws, 0.63, 0.58))                 # clear of the note above and the callouts either side
     typed("ok")
     key(ws, "Enter", "Enter", 13, meta=True)
@@ -1122,6 +1139,7 @@ def surface_checks(ws):
           st()["annos"][-1]["width"] > dr["width"] * 1.05 and loose["h"] == tight["h"], f"{dr['width']} -> {st()['annos'][-1]['width']}, h {loose['h']}")
     # A click with an unsteady hand is still a click: a few pixels of
     # travel must not make a box a few pixels wide.
+    click(ws, "#toolText")
     slip = stage_point(ws, 0.76, 0.64)
     mouse("mousePressed", *slip); mouse("mouseMoved", slip[0] + 5, slip[1] + 2); mouse("mouseMoved", slip[0] + 9, slip[1] + 3)
     mouse("mouseReleased", slip[0] + 9, slip[1] + 3)
@@ -1346,7 +1364,7 @@ def surface_checks(ws):
     # to the floating hint — still one place, just the other one.
     ev(ws, "document.getElementById('btnAddBlank').click()")
     time.sleep(0.6)
-    esc()                                             # the text tool was still in hand from above
+    esc()
     key(ws, "t", "KeyT", 84)
     hints = ev(ws, """({ float: getComputedStyle(document.getElementById('placeHint')).display,
       row: getComputedStyle(document.getElementById('armedNote')).display,
@@ -2107,9 +2125,18 @@ def main():
               == "#1f6feb",
               ev(ws, "document.querySelector('#leaderSvg .ink-stroke').getAttribute('stroke')"))
 
-        # The pen must stay armed for a second stroke, as every tool does.
+        # One pick of the pen is one stroke, as with every tool: it goes
+        # back to Select, and the stroke is left selected.
+        check("the pen is put away after one stroke",
+              ev(ws, "document.getElementById('toolPen').classList.contains('toggled')") is False
+              and ev(ws, "document.querySelectorAll('#leaderSvg .ink-halo').length") == 1)
         drag_stroke([(0.25, 0.65), (0.45, 0.78), (0.7, 0.65)])
-        check("pen stays active for repeated strokes",
+        check("so a second drag pans instead of drawing",
+              ev(ws, "document.querySelectorAll('#leaderSvg .ink-stroke').length") == 1,
+              f"{ev(ws, 'document.querySelectorAll(\"#leaderSvg .ink-stroke\").length')} strokes")
+        key(ws, "p", "KeyP", 80)
+        drag_stroke([(0.25, 0.65), (0.45, 0.78), (0.7, 0.65)])
+        check("picking the pen again draws the next stroke",
               ev(ws, "document.querySelectorAll('#leaderSvg .ink-stroke').length") == 2,
               f"{ev(ws, 'document.querySelectorAll(\"#leaderSvg .ink-stroke\").length')} strokes")
         check("ink counts toward the page's annotations",
@@ -2146,6 +2173,7 @@ def main():
           }
           return last;
         })()"""
+        key(ws, "p", "KeyP", 80)                       # in hand again, for the check below
         onstroke = ev(ws, ON_STROKE)
         time.sleep(0.4)
         # While the pen is active the layer deliberately swallows hits, so

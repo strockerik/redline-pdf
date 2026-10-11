@@ -51,11 +51,14 @@ The richest source of bugs in this app, because the failures are silent.
   There is a `window.blur` reset in `view.js` for exactly this.
 - Does a mode flag survive a reload when it should not? Transient mouse
   modes are deliberately excluded from the snapshot.
-- **A tool stays armed until it is put away.** Every tool, not just the
-  pen: `placeNote` deliberately does not go back to select. So any click
-  that *ends* something — typing in a note, a drag — must not also be read
-  as a request for the next markup. `wasEditing` and `swallowClick` in
-  annots.js are those two guards; a new tool needs to honour both.
+- **A tool is used once, then goes back to Select** — the pen included.
+  (Rev 0.20 had every tool stay armed; the owner reversed it in 0.24.)
+  The trap is the click that *ends* the gesture: by the time it arrives
+  the tool is already Select, where a click on bare page means
+  "deselect" — so the markup just drawn, which is left selected on
+  purpose, would be deselected by its own mouse-up. `swallowClick` in
+  annots.js is the guard; `wasEditing` is its sibling for a click that
+  only ends typing. A new tool needs to honour both.
 - **Controls that come and go must not move the page.** The properties
   row shows only what applies to the tool in hand, in a row of fixed
   height. The same controls in a toolbar that grew resized the stage, and

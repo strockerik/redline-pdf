@@ -20,8 +20,8 @@ and it works with no network connection once installed.
   appears only once a second document is open.
 - **Mark up** — text boxes, callouts with a leader, a freehand pen, a
   highlighter, arrows, boxes and revision clouds. Six colours, six text
-  sizes, three line weights. A tool stays in hand until you put it away
-  (Esc), so twenty callouts are twenty placements. A callout shows its
+  sizes, three line weights. A tool is used once: pick it, place one
+  markup, and you are back on Select with that markup selected. A callout shows its
   whole leader between the two clicks, so you can see how it will sit
   before you commit; the leader meets its note on a short level jog, the
   way a drafter draws one. Notes get a white fill so they read over dense
@@ -83,7 +83,7 @@ sheet, and saving downloads to the Files app.
 | ⌘S | Save over the opened file |
 | ⇧⌘S | Save As |
 | ⌘Z / ⇧⌘Z | Undo / redo |
-| ⌘Return | Finish typing a note, keeping the tool |
+| ⌘Return | Finish typing a note |
 | ⌘D | Duplicate the selected markup |
 | ⌘C / ⌘V | Copy the selected markup / paste it on this page |
 | ⌘+ / ⌘− | Zoom in / out |

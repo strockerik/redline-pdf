@@ -235,8 +235,13 @@ error that only shows up on 90°/270° pages and is miserable to eyeball.
   (`sized`). The two widths differ by a few points because the fonts do —
   don't "fix" that by carrying one over to the other, or the text gains a
   gap or a wrapped last word.
-- **Tools stay armed** until Esc, Select, or the same tool again. A click
-  that only ends typing in a note must not place another one.
+- **A tool is used once.** Picking one arms it for a single markup;
+  placing that markup goes back to Select (`placeNote`, and the end of a
+  stroke in `installDrawing`), leaving the new markup selected. This is
+  the owner's decision and it overrides the UX review, which had every
+  tool stay armed — don't "restore" that. A tool that has not placed
+  anything yet (a two-point tool clicked without dragging, a callout
+  after its first click) stays in hand.
 - **The properties row has a fixed height** and shows only what applies.
   Don't let a control that comes and goes change the height of anything
   above the stage — it re-fits the page.
@@ -271,9 +276,11 @@ change.
 Shipped since: freehand ink, then document tabs (see the architecture
 note above — the rest of the app never learned about them), then the
 rev 0.20 redesign from the UX review in `.ux-review/` (gitignored): undo
-and redo, tools that stay armed, highlight / arrow / box / cloud, one
+and redo, highlight / arrow / box / cloud, one
 Save with the other file commands behind it, the page field, the markups
 list, note fill, duplicate and copy/paste, and the save chip and alert.
 
 Kept through that review, on purpose: no autosave, documents close with
-the app, Chromium-only for save-in-place.
+the app, Chromium-only for save-in-place. Reversed afterwards, by the
+owner (rev 0.24): the review's "tools stay armed" — every tool is
+one-shot.

@@ -9,6 +9,9 @@
  * down). Conversion to the PDF's native content space happens once, at
  * export time — see export.js and guide §3.
  *
+ * A tool is used once. Picking one arms it for a single markup; placing
+ * that markup puts the tool back to Select.
+ *
  * Every change to a markup is preceded by a history checkpoint, taken on
  * the first movement of a drag rather than on the press, so a click that
  * changes nothing leaves nothing to undo.
@@ -237,9 +240,8 @@ function wireNoteInteractions(page, a, els) {
     updateLeaderVisual(page, a);
   });
 
-  // ⌘Return finishes the note from the keyboard. Return alone is a new
-  // line, and Esc also puts the tool away; this is the one that leaves
-  // the tool in hand, ready for the next note.
+  // ⌘Return finishes the note from the keyboard, without reaching for
+  // the mouse. Return alone is a new line; Esc also deselects the note.
   text.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
@@ -670,8 +672,16 @@ export function installDrawing() {
     checkpoint('Add ' + ({ ink: 'pen stroke', highlight: 'highlight', arrow: 'arrow', rect: 'box', cloud: 'cloud' })[a.type]);
     page.annotations.push(a);
     markDirty();
+    // One pick of a tool, one markup. The tool goes back, and what was
+    // just drawn is left selected — ready to be restyled, nudged or
+    // deleted without having to find its line again.
+    state.selectedAnnoId = a.id;
     renderAnnotationLayer(page);
     updateThumbBadge(page);
+    setActiveTool('select');
+    // The click that ends this drag now reaches a layer with no drawing
+    // tool on it, where a click on bare page means "deselect".
+    swallowClick = true;
   };
   layer.addEventListener('pointerup', finish);
   layer.addEventListener('pointercancel', finish);
@@ -738,8 +748,9 @@ export function handleLayerClick(e) {
   const page = currentPage();
   if (!page) return;
 
-  // The tool stays armed, so a click away from a note being typed would
-  // otherwise drop a second one. It only ends the typing.
+  // A tool can be in hand while an existing note is being typed into (it
+  // was picked, then a note was opened instead of placing one). The click
+  // away from that note only ends the typing; it is not also a placement.
   if (wasEditing && (tool === 'text' || tool === 'callout')) { wasEditing = false; return; }
 
   const p = pointAt(e);
@@ -866,9 +877,9 @@ function placeNote(page, props) {
   if (refs.tipHandle) refs.tipHandle.style.display = '';
   refs.textEl.focus();
 
-  // The tool is deliberately left armed: twenty callouts on a sheet is
-  // twenty placements, not twenty trips back to the toolbar.
-  updateToolbarState();
+  // One pick of a tool, one markup: it has been used, so it goes back.
+  // (The owner's call, over the review that had tools stay armed.)
+  setActiveTool('select');
   updateThumbBadge(page);
 }
 

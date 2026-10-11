@@ -140,11 +140,11 @@ function buildPenSizes() {
 const ARMED = {
   text: 'click to drop a note, or drag to set its width',
   callout: 'click what you’re pointing at, then where the note goes',
-  pen: 'draw as many as you like',
-  highlight: 'draw as many as you like',
-  arrow: 'drag from tail to tip, as many as you like',
-  rect: 'drag from corner to corner, as many as you like',
-  cloud: 'drag from corner to corner, as many as you like',
+  pen: 'draw one stroke',
+  highlight: 'draw one stroke',
+  arrow: 'drag from tail to tip',
+  rect: 'drag from corner to corner',
+  cloud: 'drag from corner to corner',
 };
 
 function refreshProps() {
