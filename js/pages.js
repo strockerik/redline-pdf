@@ -7,6 +7,7 @@ import {
   renderThumbnails, renderMainCanvas, updateThumbSelection,
   invalidateThumb, invalidateAllThumbs, updateTitle,
 } from './view.js';
+import { takeMarkups } from './export.js';
 
 const { PDFDocument } = PDFLib;
 
@@ -29,15 +30,22 @@ function pdfWorker() {
  *  Returns the id of the first page added, or null on failure. */
 export async function importPdfBytes(bytes, name) {
   try {
-    // pdf.js transfers (and detaches) the buffer it is handed, so every
-    // consumer needs its own copy.
-    const pdfLibDoc = await PDFDocument.load(bytes.slice(0), { ignoreEncryption: true });
-    const pdfjsDoc = await pdfjsLib.getDocument({
-      data: bytes.slice(0), worker: pdfWorker(),
-    }).promise;
+    // pdf-lib keeps views into the buffer it parsed; pdf.js transfers (and
+    // detaches) the one it is handed. So they can never share one.
+    const pdfLibDoc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+
+    // Markups Redline saved earlier come back as markups. They are taken
+    // out of the document first, so pdf.js has to be given the document as
+    // it now stands — without them — or it would draw each one underneath
+    // its editable self.
+    const markups = takeMarkups(pdfLibDoc);
+    const forPdfjs = markups.size
+      ? await pdfLibDoc.save({ useObjectStreams: false, updateFieldAppearances: false })
+      : bytes.slice(0);
+    const pdfjsDoc = await pdfjsLib.getDocument({ data: forPdfjs, worker: pdfWorker() }).promise;
 
     const sourceId = state.nextSourceId++;
-    state.sources.push({ id: sourceId, name, bytes, pdfLibDoc, pdfjsDoc });
+    state.sources.push({ id: sourceId, name, pdfLibDoc, pdfjsDoc });
 
     // Merging a second file means the document no longer corresponds to
     // any single file on disk. Keeping the first file's handle here is
@@ -56,6 +64,7 @@ export async function importPdfBytes(bytes, name) {
 
     const count = pdfLibDoc.getPageCount();
     let firstNew = null;
+    let restored = 0;
     for (let i = 0; i < count; i++) {
       const p = pdfLibDoc.getPage(i);
       const size = p.getSize();   // raw MediaBox — not rotation-adjusted
@@ -69,6 +78,15 @@ export async function importPdfBytes(bytes, name) {
         rotation: normRot(p.getRotation().angle),
         annotations: [],
       };
+      for (const { markup, R } of markups.get(i) || []) {
+        page.annotations.push({ id: state.nextAnnoId++, ...markup });
+        // Saved against one rotation, opened at another: something else
+        // has turned the page since. Carry the markup round with it.
+        if (R !== page.rotation) {
+          remapAnnotationsForRotation({ annotations: [page.annotations.at(-1)], W0: page.W0, H0: page.H0 }, R, page.rotation);
+        }
+        restored++;
+      }
       state.pages.push(page);
       if (firstNew === null) firstNew = page.id;
     }
@@ -81,7 +99,8 @@ export async function importPdfBytes(bytes, name) {
     if (justCombined) {
       setStatus('Combined document — Save now asks where to put it.', 'ok');
     } else {
-      setStatus(`Imported ${name} (${count} page${count === 1 ? '' : 's'})`, 'ok');
+      const notes = restored ? `, ${restored} editable markup${restored === 1 ? '' : 's'}` : '';
+      setStatus(`Imported ${name} (${count} page${count === 1 ? '' : 's'}${notes})`, 'ok');
     }
     return firstNew;
   } catch (err) {

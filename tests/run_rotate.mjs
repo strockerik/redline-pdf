@@ -184,3 +184,4 @@ for (const R0 of [0, 90, 180, 270]) {
 }
 
 print(failures ? `\n${failures} FAILURE(S)` : '\nAll rotate-remap checks passed');
+if (failures) throw new Error('rotate-remap checks failed');

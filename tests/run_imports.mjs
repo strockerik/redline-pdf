@@ -11,3 +11,4 @@ for (const m of ['state.js','rotmath.test.js','export.js','persist.js','plotcomp
   catch (e) { bad++; print(`FAIL  ${m}: ${e.stack || e}`); }
 }
 print(bad ? `\n${bad} module(s) failed to load` : '\nAll modules load cleanly');
+if (bad) throw new Error("modules failed to load");

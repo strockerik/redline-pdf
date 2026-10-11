@@ -1,16 +1,26 @@
-/* Build the output PDF with pdf-lib.
+/* Build the output PDF with pdf-lib, and read Redline's own markups back
+ * out of one.
  *
  * This is where visual-space annotation coordinates become native PDF
  * content coordinates. Every point goes through toNative; text
  * additionally gets a counter-rotation so glyphs read upright after the
  * viewer applies the page's own /Rotate. See guide §3 and §10.
+ *
+ * A markup can leave in two forms. Saved normally it is a real PDF
+ * annotation — its picture in an appearance stream, its meaning in the
+ * annotation dictionary — so it can be moved, edited or deleted the next
+ * time the file is opened, here or in any other PDF editor. Flattened, it
+ * is painted into the page and is simply part of the drawing from then on.
  */
 import {
-  state, toNative, textCompensationDegrees, hexToRgb01,
+  state, toNative, textCompensationDegrees, hexToRgb01, normRot,
   computeAttachPoint, computeArrowWings, ANNO_PAD, LINE_HEIGHT_MULT,
 } from './state.js';
 
-const { PDFDocument, StandardFonts, rgb, degrees, LineCapStyle } = PDFLib;
+const {
+  PDFDocument, PDFPage, PDFDict, PDFName, PDFRef, PDFString, PDFHexString,
+  StandardFonts, rgb, degrees, LineCapStyle,
+} = PDFLib;
 
 // Round caps and joins are what make a chain of straight segments read as
 // one smooth pen stroke rather than a run of dashes.
@@ -50,6 +60,13 @@ function toWinAnsi(s) {
     .replace(/[^\x00-\xFF]/g, '?');
 }
 
+/** How a note's text breaks in the PDF font, and so how tall its box is. */
+function layoutNote(a, font) {
+  const lines = wrapTextForFont(toWinAnsi(a.text), font, a.fontSize, a.width - ANNO_PAD * 2);
+  const lineHeight = a.fontSize * LINE_HEIGHT_MULT;
+  return { lines, lineHeight, boxHeight: lines.length * lineHeight + ANNO_PAD * 2 };
+}
+
 /** Exported for the geometry tests — everything about where a markup
  *  lands on a rotated page is decided here. */
 export function drawAnnotationOnPage(pdfPage, font, a, R, W0, H0) {
@@ -74,9 +91,7 @@ export function drawAnnotationOnPage(pdfPage, font, a, R, W0, H0) {
     }
     return;
   }
-  const lines = wrapTextForFont(toWinAnsi(a.text), font, a.fontSize, a.width - pad * 2);
-  const lineHeight = a.fontSize * LINE_HEIGHT_MULT;
-  const boxHeight = lines.length * lineHeight + pad * 2;
+  const { lines, lineHeight, boxHeight } = layoutNote(a, font);
 
   // An axis-aligned box in visual space stays axis-aligned in native
   // space (the transform is only 90° rotations plus one axis flip), so
@@ -121,12 +136,217 @@ export function drawAnnotationOnPage(pdfPage, font, a, R, W0, H0) {
   }
 }
 
-/** Build the output document and return its bytes. */
-export async function buildPdfBytes() {
+// ============================================================
+// Markups that stay editable
+//
+// Each one is written as a standard annotation (FreeText, FreeText with a
+// callout line, or Ink) whose appearance stream is the very drawing that
+// flattening would have put on the page. So it looks the same either way,
+// and any viewer shows it.
+//
+// What Redline itself reads back is not the annotation's standard fields
+// but one private entry, /RedlineMarkup: the markup exactly as the editor
+// holds it. Reconstructing a note from /Rect, /DA and /CL would be lossy,
+// and guessing at another program's FreeText is not something to do by
+// accident.
+// ============================================================
+const MARKUP_KEY = 'RedlineMarkup';
+const BOUNDS_PAD = 2;          // pt around the geometry: stroke width and antialiasing
+const r2 = (v) => Math.round(v * 100) / 100;
+
+/** The box a markup draws inside, in native page space. */
+function markupBounds(a, font, R, W0, H0) {
+  const pts = [];
+  let pad = BOUNDS_PAD;
+  let inner = null;                       // the note's own box, for callouts
+  if (a.type === 'ink') {
+    for (const p of a.points || []) pts.push(p);
+    pad += (a.size || 2.5) / 2;
+  } else {
+    const { boxHeight } = layoutNote(a, font);
+    pts.push({ x: a.x, y: a.y }, { x: a.x + a.width, y: a.y + boxHeight });
+    inner = nativeBox(pts, R, W0, H0);
+    if (a.type === 'callout') {
+      const attach = computeAttachPoint(a, boxHeight);
+      const tip = { x: a.tipX, y: a.tipY };
+      pts.push(tip, ...computeArrowWings(attach, tip));
+    }
+  }
+  if (!pts.length) return null;
+  const b = nativeBox(pts, R, W0, H0);
+  return {
+    box: { left: b.left - pad, bottom: b.bottom - pad, right: b.right + pad, top: b.top + pad },
+    inner,
+  };
+}
+
+function nativeBox(pts, R, W0, H0) {
+  let left = Infinity, bottom = Infinity, right = -Infinity, top = -Infinity;
+  for (const p of pts) {
+    const n = toNative(R, W0, H0, p.x, p.y);
+    if (n.x < left) left = n.x; if (n.x > right) right = n.x;
+    if (n.y < bottom) bottom = n.y; if (n.y > top) top = n.y;
+  }
+  return { left, bottom, right, top };
+}
+
+/** Add one markup to `pdfPage` as an annotation. */
+async function attachMarkup(outDoc, pdfPage, font, a, R, W0, H0, serial) {
+  const bounds = markupBounds(a, font, R, W0, H0);
+  if (!bounds) return;
+  const { box, inner } = bounds;
+  const ctx = outDoc.context;
+
+  // The appearance is drawn by the same code as a flattened markup, onto a
+  // page of its own, and that page is then lifted into a form XObject. Two
+  // ways of drawing a note would sooner or later be two different notes.
+  //
+  // The form's BBox is the annotation's Rect, in page coordinates, so a
+  // viewer maps one onto the other without moving anything: every rule
+  // about rotation above holds unchanged.
+  const scratch = PDFPage.create(outDoc);
+  scratch.setSize(W0, H0);
+  drawAnnotationOnPage(scratch, font, a, R, W0, H0);
+  if (!scratch.contentStreamRef) { ctx.delete(scratch.ref); return; }   // drew nothing
+  const form = await outDoc.embedPage(scratch, box);
+  await form.embed();               // now, so the scratch page can go
+  ctx.delete(scratch.contentStreamRef);
+  ctx.delete(scratch.ref);
+
+  const col = hexToRgb01(a.color);
+  const rgbArr = [r2(col.r), r2(col.g), r2(col.b)];
+  const dict = {
+    Type: 'Annot',
+    Rect: [r2(box.left), r2(box.bottom), r2(box.right), r2(box.top)],
+    F: 4,                                              // print
+    P: pdfPage.ref,
+    NM: PDFString.of(`redline-${serial}`),
+    M: PDFString.fromDate(new Date()),
+    AP: { N: form.ref },
+    [MARKUP_KEY]: PDFHexString.fromText(JSON.stringify(markupPayload(a, R))),
+  };
+
+  if (a.type === 'ink') {
+    const list = [];
+    for (const p of a.points) {
+      const n = toNative(R, W0, H0, p.x, p.y);
+      list.push(r2(n.x), r2(n.y));
+    }
+    Object.assign(dict, { Subtype: 'Ink', InkList: [list], C: rgbArr, BS: { W: a.size || 2.5 } });
+  } else {
+    Object.assign(dict, {
+      Subtype: 'FreeText',
+      Contents: PDFHexString.fromText(a.text || ''),
+      DA: PDFString.of(`${rgbArr.join(' ')} rg /Helv ${a.fontSize} Tf`),
+      C: [1, 1, 1],                                    // a FreeText's /C is its background
+      BS: { W: 1.1 },
+      // How far the note's own box sits inside the Rect.
+      RD: [r2(inner.left - box.left), r2(inner.bottom - box.bottom), r2(box.right - inner.right), r2(box.top - inner.top)],
+    });
+    if (a.type === 'callout') {
+      const { boxHeight } = layoutNote(a, font);
+      const at = computeAttachPoint(a, boxHeight);
+      const tip = toNative(R, W0, H0, a.tipX, a.tipY);
+      const end = toNative(R, W0, H0, at.x, at.y);
+      Object.assign(dict, { IT: 'FreeTextCallout', CL: [r2(tip.x), r2(tip.y), r2(end.x), r2(end.y)], LE: 'OpenArrow' });
+    }
+  }
+  pdfPage.node.addAnnot(ctx.register(ctx.obj(dict)));
+}
+
+/** A markup as the editor holds it, plus the rotation its coordinates
+ *  are relative to — visual space moves when the page is turned. */
+function markupPayload(a, R) {
+  const p = { v: 1, R: normRot(R), type: a.type, color: a.color };
+  if (a.type === 'ink') {
+    p.size = a.size || 2.5;
+    p.points = a.points.map((q) => [r2(q.x), r2(q.y)]);
+  } else {
+    Object.assign(p, { x: r2(a.x), y: r2(a.y), width: r2(a.width), text: a.text || '', fontSize: a.fontSize });
+    if (a.type === 'callout') { p.tipX = r2(a.tipX); p.tipY = r2(a.tipY); }
+  }
+  return p;
+}
+
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+const LIMIT = 1e5;                 // pt; no page is this large
+const fin = (v, lo = -LIMIT, hi = LIMIT) => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
+
+/** Turn a payload back into a markup, or null. A PDF is someone else's
+ *  file: every field is checked and the result is built fresh, so nothing
+ *  the payload carries reaches the editor unexamined. */
+function readPayload(p) {
+  if (!p || typeof p !== 'object' || p.v !== 1 || typeof p.color !== 'string' || !HEX_COLOR.test(p.color)) return null;
+  if (!fin(p.R, 0, 360)) return null;
+  const R = normRot(p.R);
+
+  if (p.type === 'ink') {
+    if (!Array.isArray(p.points) || !p.points.length || p.points.length > 200000 || !fin(p.size, 0.05, 100)) return null;
+    const points = [];
+    for (const q of p.points) {
+      if (!Array.isArray(q) || !fin(q[0]) || !fin(q[1])) return null;
+      points.push({ x: q[0], y: q[1] });
+    }
+    return { R, markup: { type: 'ink', color: p.color, size: p.size, points } };
+  }
+
+  if (p.type !== 'text' && p.type !== 'callout') return null;
+  if (!fin(p.x) || !fin(p.y) || !fin(p.width, 1) || !fin(p.fontSize, 2, 400)) return null;
+  if (typeof p.text !== 'string' || p.text.length > 50000) return null;
+  const markup = { type: p.type, x: p.x, y: p.y, width: p.width, text: p.text, fontSize: p.fontSize, color: p.color };
+  if (p.type === 'callout') {
+    if (!fin(p.tipX) || !fin(p.tipY)) return null;
+    markup.tipX = p.tipX;
+    markup.tipY = p.tipY;
+  }
+  return { R, markup };
+}
+
+/** Lift Redline's markups out of a loaded document, removing their
+ *  annotations from it. Returns a Map of page index -> [{ markup, R }],
+ *  R being the page rotation the coordinates were saved against.
+ *
+ *  They have to come out, not just be read: left in, pdf.js would draw
+ *  each one under the editable copy, and the next save would write it
+ *  twice. One that cannot be read is left where it is — still visible,
+ *  just not editable — rather than quietly deleted from someone's file. */
+export function takeMarkups(pdfLibDoc) {
+  const ctx = pdfLibDoc.context;
+  const key = PDFName.of(MARKUP_KEY);
+  const byPage = new Map();
+  pdfLibDoc.getPages().forEach((page, index) => {
+    const annots = page.node.Annots();
+    if (!annots) return;
+    const found = [];
+    for (let i = annots.size() - 1; i >= 0; i--) {
+      const dict = annots.lookupMaybe(i, PDFDict);
+      const raw = dict && dict.lookup(key);
+      if (!raw || typeof raw.decodeText !== 'function') continue;
+      let parsed = null;
+      try { parsed = readPayload(JSON.parse(raw.decodeText())); } catch { /* not ours to read */ }
+      if (!parsed) continue;
+      found.unshift(parsed);
+
+      const ref = annots.get(i);
+      const ap = dict.lookupMaybe(PDFName.of('AP'), PDFDict);
+      const normal = ap && ap.get(PDFName.of('N'));
+      annots.remove(i);
+      if (normal instanceof PDFRef) ctx.delete(normal);
+      if (ref instanceof PDFRef) ctx.delete(ref);
+    }
+    if (found.length) byPage.set(index, found);
+  });
+  return byPage;
+}
+
+/** Build the output document and return its bytes. Markups are written as
+ *  editable annotations unless `flatten` asks for them to be painted in. */
+export async function buildPdfBytes({ flatten = false } = {}) {
   if (!state.pages.length) throw new Error('Nothing to export yet.');
 
   const outDoc = await PDFDocument.create();
   const font = await outDoc.embedFont(StandardFonts.Helvetica);
+  let serial = 0;
 
   // Copy every page needed from a given source in one copyPages call.
   // Calling it once per output page re-embeds that source's shared
@@ -170,7 +390,8 @@ export async function buildPdfBytes() {
     newPage.setRotation(degrees(page.rotation));
 
     for (const a of page.annotations) {
-      drawAnnotationOnPage(newPage, font, a, page.rotation, page.W0, page.H0);
+      if (flatten) drawAnnotationOnPage(newPage, font, a, page.rotation, page.W0, page.H0);
+      else await attachMarkup(outDoc, newPage, font, a, page.rotation, page.W0, page.H0, ++serial);
     }
   }
 

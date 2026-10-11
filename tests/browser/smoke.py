@@ -429,6 +429,151 @@ def launch_checks(ws):
     check("no database holds the session or its file handles", dbs == [], str(dbs))
 
 
+def markup_checks(ws):
+    """Markups stay editable across a save and reopen, until flattened.
+
+    Saved normally, a note is a real PDF annotation; opening the file again
+    gives it back as a note. Flattened, it is paint. The thing most likely
+    to go wrong quietly is a markup drawn twice — once by pdf.js from the
+    file, once by the editor on top — which looks right until it is moved.
+    """
+    print("\n=== markups stay editable ===")
+
+    made = ev(ws, """(async () => {
+      const tabs = await import('./js/tabs.js'), pages = await import('./js/pages.js');
+      const { state } = await import('./js/state.js'), view = await import('./js/view.js');
+      tabs.openDocument();
+      const buf = await (await fetch('./tests/browser/fixture.pdf')).arrayBuffer();
+      await pages.importPdfBytes(buf, 'marked.pdf');
+      const p = state.pages[0];
+      p.annotations.push(
+        { id: state.nextAnnoId++, type: 'text', x: 60, y: 80, width: 170, text: 'Naïve note — “quoted”', fontSize: 12, color: '#b23a3a' },
+        { id: state.nextAnnoId++, type: 'callout', x: 250, y: 300, width: 170, text: 'Check this', fontSize: 12, color: '#1f6feb', tipX: 120, tipY: 420 },
+        { id: state.nextAnnoId++, type: 'ink', color: '#1a7f37', size: 5, points: [{ x: 300, y: 500 }, { x: 340, y: 540 }, { x: 380, y: 500 }] });
+      await view.renderMainCanvas();
+      const { buildPdfBytes } = await import('./js/export.js');
+      window.__marked = await buildPdfBytes();
+      return { notes: document.querySelectorAll('.anno-box').length, strokes: document.querySelectorAll('.ink-stroke').length };
+    })()""", awaitp=True)
+    check("three markups on the page", made == {"notes": 2, "strokes": 1}, str(made))
+
+    # What any other PDF program would make of the saved file.
+    BLUE = "(d, i) => Math.abs(d[i] - 31) < 45 && Math.abs(d[i + 1] - 111) < 45 && Math.abs(d[i + 2] - 235) < 45"
+    outside = ev(ws, """(async (bytes) => {
+      const blue = %s;
+      const doc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
+      const page = await doc.getPage(1);
+      const annots = await page.getAnnotations();
+      const vp = page.getViewport({ scale: 1.5 });
+      const draw = async (annotationMode) => {
+        const c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height;
+        await page.render({ canvasContext: c.getContext('2d'), viewport: vp, annotationMode }).promise;
+        const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        let n = 0; for (let i = 0; i < d.length; i += 4) if (blue(d, i)) n++;
+        return n;
+      };
+      return { kinds: annots.map((a) => a.subtype).sort(), text: annots.map((a) => a.contentsObj && a.contentsObj.str).filter(Boolean).sort(),
+               withAnnots: await draw(pdfjsLib.AnnotationMode.ENABLE), pageOnly: await draw(pdfjsLib.AnnotationMode.DISABLE) };
+    })(window.__marked)""" % BLUE, awaitp=True)
+    check("saved as standard annotations", outside["kinds"] == ["FreeText", "FreeText", "Ink"], str(outside["kinds"]))
+    check("carrying their text", outside["text"] == ["Check this", "Naïve note — “quoted”"], str(outside["text"]))
+    check("another viewer draws them", outside["withAnnots"] > 50, f"{outside['withAnnots']} px of the callout's blue")
+    check("and they are not part of the page itself", outside["pageOnly"] == 0, f"{outside['pageOnly']} px with annotations off")
+
+    # Reopen it.
+    page_blue = """(() => {
+      const blue = %s;
+      const c = document.getElementById('pageCanvas');
+      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      let n = 0; for (let i = 0; i < d.length; i += 4) if (blue(d, i)) n++;
+      return n; })()""" % BLUE
+    back = ev(ws, """(async () => {
+      const tabs = await import('./js/tabs.js'), pages = await import('./js/pages.js');
+      const { state } = await import('./js/state.js'), view = await import('./js/view.js');
+      tabs.openDocument();
+      await pages.importPdfBytes(window.__marked.slice().buffer, 'reopened.pdf');
+      await view.renderMainCanvas();
+      const p = state.pages[0];
+      const pj = await state.sources[0].pdfjsDoc.getPage(1);
+      return {
+        status: document.getElementById('statusMsg').textContent,
+        kinds: p.annotations.map((a) => a.type), text: p.annotations.map((a) => a.text || ''),
+        ids: new Set(p.annotations.map((a) => a.id)).size,
+        notes: document.querySelectorAll('.anno-box').length, strokes: document.querySelectorAll('.ink-stroke').length,
+        inFile: (await pj.getAnnotations()).length,
+        at: p.annotations.map((a) => a.type === 'ink' ? a.points[0].x : a.x),
+      };
+    })()""", awaitp=True)
+    check("reopened, they are markups again", back["kinds"] == ["text", "callout", "ink"], str(back["kinds"]))
+    check("with their text intact", back["text"][:2] == ["Naïve note — “quoted”", "Check this"], str(back["text"]))
+    check("where they were put", back["at"] == [60, 250, 300], str(back["at"]))
+    check("each one selectable on the page", back["notes"] == 2 and back["strokes"] == 1 and back["ids"] == 3, str(back))
+    check("the status line says so", "3 editable markups" in back["status"], back["status"])
+    check("pdf.js is not given a second copy to draw", back["inFile"] == 0, f"{back['inFile']} annotations left in the file")
+    time.sleep(0.5)
+    check("so nothing is drawn underneath the editable one", ev(ws, page_blue) == 0, f"{ev(ws, page_blue)} px of blue on the page canvas")
+    shot(ws, "11-markups-reopened")
+
+    # Edit one, delete one, save, reopen.
+    again = ev(ws, """(async () => {
+      const tabs = await import('./js/tabs.js'), pages = await import('./js/pages.js');
+      const { state } = await import('./js/state.js'), annots = await import('./js/annots.js');
+      const { buildPdfBytes } = await import('./js/export.js');
+      const p = state.pages[0];
+      p.annotations[0].text = 'Edited after reopening';
+      p.annotations[0].x = 90;
+      annots.deleteAnnotation(p, p.annotations[1].id);
+      const bytes = await buildPdfBytes();
+      tabs.openDocument();
+      await pages.importPdfBytes(bytes.slice().buffer, 'third.pdf');
+      const q = state.pages[0];
+      return { kinds: q.annotations.map((a) => a.type), text: q.annotations[0].text, x: q.annotations[0].x };
+    })()""", awaitp=True)
+    check("an edit and a delete both survive the next save", again == {"kinds": ["text", "ink"], "text": "Edited after reopening", "x": 90}, str(again))
+
+    # Flatten, through the button.
+    ev(ws, """(() => {
+      window.__flat = null;
+      window.__realPicker = window.showSaveFilePicker;
+      window.showSaveFilePicker = async (opts) => {
+        const chunks = [];
+        window.__flatName = opts && opts.suggestedName;
+        return { name: 'flat.pdf', createWritable: async () => ({
+          write: async (b) => { chunks.push(b); },
+          close: async () => { window.__flat = new Uint8Array(await new Blob(chunks).arrayBuffer()); },
+        }) };
+      };
+    })()""")
+    before = ev(ws, "(async () => { const { state } = await import('./js/state.js'); return { name: state.docName, n: state.pages[0].annotations.length, handle: !!state.fileHandle }; })()", awaitp=True)
+    stem = ev(ws, "document.getElementById('filenameInput').value.replace(/\\.pdf$/i, '')")
+    click(ws, "#btnFlatten")
+    wait_for(ws, "!!window.__flat", timeout=20, label="Flatten wrote a file")
+    flat = ev(ws, """(async () => {
+      const tabs = await import('./js/tabs.js'), pages = await import('./js/pages.js');
+      const { state } = await import('./js/state.js'), view = await import('./js/view.js');
+      const keep = { name: state.docName, n: state.pages[0].annotations.length, handle: !!state.fileHandle,
+                     status: document.getElementById('statusMsg').textContent, suggested: window.__flatName };
+      const doc = await pdfjsLib.getDocument({ data: window.__flat.slice() }).promise;
+      const inFile = (await (await doc.getPage(1)).getAnnotations()).length;
+      tabs.openDocument();
+      await pages.importPdfBytes(window.__flat.slice().buffer, 'flat.pdf');
+      await view.renderMainCanvas();
+      window.showSaveFilePicker = window.__realPicker;
+      return { keep, inFile, editable: state.pages[0].annotations.length, notes: document.querySelectorAll('.anno-box').length };
+    })()""", awaitp=True)
+    check("Flatten offers a name of its own, beside the original's",
+          flat["keep"]["suggested"] == f"{stem} - flattened.pdf", str(flat["keep"]["suggested"]))
+    check("the flattened copy holds no annotations", flat["inFile"] == 0, f"{flat['inFile']}")
+    check("reopened, nothing in it can be edited", flat["editable"] == 0 and flat["notes"] == 0, str(flat))
+    time.sleep(0.5)
+    red = """(() => { const c = document.getElementById('pageCanvas'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      let n = 0; for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - 178) < 45 && Math.abs(d[i + 1] - 58) < 45 && Math.abs(d[i + 2] - 58) < 45) n++; return n; })()"""
+    check("but the markups are there, painted into the page", ev(ws, red) > 50, f"{ev(ws, red)} px of the note's red")
+    check("the open document kept its markups and its identity",
+          {k: flat["keep"][k] for k in ("name", "n", "handle")} == before, f"{flat['keep']} vs {before}")
+    shot(ws, "12-flattened")
+
+
 def tab_checks(ws):
     """Open in Tabs: each file its own document, with its own pages, name
     and save target, and nothing one tab does reaching into another.
@@ -1342,6 +1487,7 @@ def main():
         heavy_page_checks(ws3, plot=True)
         heavy_page_checks(ws3, plot=False)
         launch_checks(ws3)
+        markup_checks(ws3)
     except TimeoutError:
         failed += 1
         print("FAIL  the renderer stopped answering during the tab checks")

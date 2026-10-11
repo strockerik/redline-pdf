@@ -19,7 +19,7 @@ import {
 import {
   installLaunchHandler, installDragAndDrop, openViaPicker,
   openViaPickerInTabs, openInTabs, takeInputMode,
-  save, saveAs, downloadCopy, canUseFileSystemAccess,
+  save, saveAs, saveFlattenedCopy, downloadCopy, canUseFileSystemAccess,
 } from './files.js';
 import {
   installTabs, ensureInitialDoc, openDocument, renderTabs, refreshActiveTab,
@@ -243,6 +243,7 @@ function wireUi() {
   $('btnSave').addEventListener('click', save);
   $('btnSaveAs').addEventListener('click', saveAs);
   $('btnDownload').addEventListener('click', downloadCopy);
+  $('btnFlatten').addEventListener('click', saveFlattenedCopy);
   // Where there's no save panel, "Save" and "Download" are the same
   // action, so don't show both.
   if (!canUseFileSystemAccess) {

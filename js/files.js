@@ -315,6 +315,41 @@ export async function saveAs() {
   }
 }
 
+/** Save a copy with the markups painted into the pages. In that copy they
+ *  are part of the drawing: nobody can move, edit or delete them again,
+ *  here or anywhere else. The open document is not touched — it keeps its
+ *  markups, its name and its save target — so flattening is never the thing
+ *  that loses the editable version. */
+export async function saveFlattenedCopy() {
+  if (!state.pages.length) { setStatus('Nothing to flatten yet.', 'err'); return; }
+  // Named after whatever Save As would call it, so the two sit together.
+  const name = ensurePdfExt(document.getElementById('filenameInput')?.value || state.docName);
+  const suggested = `${name.replace(/\.pdf$/i, '')} - flattened.pdf`;
+
+  if (!canUseFileSystemAccess) {
+    setStatus('Building PDF…');
+    try {
+      downloadBytes(await buildPdfBytes({ flatten: true }), suggested);
+      setStatus('Downloaded a flattened copy ✓', 'ok');
+    } catch (err) {
+      console.error(err);
+      setStatus('Export failed: ' + (err.message || err), 'err');
+    }
+    return;
+  }
+
+  try {
+    const handle = await window.showSaveFilePicker({ suggestedName: suggested, types: PDF_PICKER_TYPES });
+    setStatus('Saving…');
+    await writeToHandle(handle, await buildPdfBytes({ flatten: true }));
+    setStatus(`Saved a flattened copy as ${handle.name || suggested} ✓`, 'ok');
+  } catch (err) {
+    if (err.name === 'AbortError') return;   // user dismissed the panel
+    console.error(err);
+    setStatus('Save failed: ' + (err.message || err), 'err');
+  }
+}
+
 /** Always-download path, kept as an explicit action so the behaviour is
  *  available even where the File System Access API exists. */
 export async function downloadCopy() {

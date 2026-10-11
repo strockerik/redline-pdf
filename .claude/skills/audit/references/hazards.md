@@ -151,6 +151,9 @@ discards work.
   rest drawn on top of each other. A "page is dark" threshold tuned
   against one renderer failed against another that was drawing it
   correctly.
+- **Can this suite fail?** Four of the JavaScriptCore suites printed
+  `FAIL` and exited 0, so `run.sh` reported "All suites passed" over real
+  failures. A check that cannot turn the run red is a comment.
 - New behaviour with no coverage is itself a finding.
 
 ## 7. Coordinate space
@@ -169,6 +172,28 @@ The rule `CLAUDE.md` calls the part that breaks if you are careless.
 Anything here without a matching case in `tests/run_geometry.mjs` or
 `tests/run_rotate.mjs` is a finding — sign errors only show up at 90°/270°
 and are miserable to spot by eye.
+
+## 7a. Markups in the saved file
+
+- **One drawing routine, two destinations.** A markup's annotation
+  appearance and its flattened form both come from
+  `drawAnnotationOnPage`. A fix made to one that does not reach the other
+  means a note that changes shape when flattened.
+- **Rect and BBox are the same box.** The appearance stream is in page
+  coordinates and its BBox equals the annotation's Rect, so a viewer maps
+  one onto the other as the identity. Pad the Rect without the BBox, or
+  the reverse, and every viewer scales the markup slightly.
+- **Take them out on the way in.** A Redline annotation left in the
+  loaded document is drawn by pdf.js *under* the editable copy — invisible
+  until the copy is moved or deleted and a ghost stays behind — and is
+  written a second time on save. pdf.js must be given the document
+  re-serialised after `takeMarkups`, not the original bytes.
+- **The payload is untrusted.** `/RedlineMarkup` arrives in a file anyone
+  could have made. Colours go into `style`, numbers into geometry; a new
+  field needs a check in `readPayload`, and an unreadable markup is left
+  in the file, not deleted.
+- **Flatten must never be the only copy.** It saves elsewhere and leaves
+  the open document, its name and its save target alone.
 
 ## 8. Persistence
 

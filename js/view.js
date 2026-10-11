@@ -1235,7 +1235,7 @@ export function updateToolbarState() {
     const el = $(id);
     if (el) el.disabled = !hasPage;
   }
-  for (const id of ['btnSave', 'btnSaveAs', 'btnDownload', 'btnClearAll']) {
+  for (const id of ['btnSave', 'btnSaveAs', 'btnDownload', 'btnFlatten', 'btnClearAll']) {
     const el = $(id);
     if (el) el.disabled = !hasDoc;
   }

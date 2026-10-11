@@ -6,3 +6,4 @@ globalThis.console = { log: (...a) => print(a.join(' ')), error: (...a) => print
 const { runRotMathTests } = await import(APP + '/rotmath.test.js');
 const r = runRotMathTests();
 print(`\n${r.failed ? r.failed + ' FAILURE(S)' : 'All ' + r.total + ' rotation-math checks passed'}`);
+if (r.failed) throw new Error('rotation-math checks failed');

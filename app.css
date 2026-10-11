@@ -119,6 +119,10 @@ select, input[type=text]{
 
 #statusMsg{
   margin-left:auto;
+  /* Takes whatever room the buttons leave and wraps its own text, rather
+     than dropping to a second row and making the whole header taller —
+     which re-fits the page every time a message appears. */
+  flex:1 1 150px; min-width:150px;
   font-family:var(--mono);
   font-size:11px;
   color:var(--muted-2);

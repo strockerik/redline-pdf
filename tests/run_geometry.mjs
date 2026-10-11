@@ -218,3 +218,4 @@ for (const R of [0, 90, 180, 270]) {
 }
 
 print(failures ? `\n${failures} FAILURE(S)` : '\nAll geometry checks passed');
+if (failures) throw new Error('geometry checks failed');

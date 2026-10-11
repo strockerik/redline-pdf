@@ -26,6 +26,11 @@ and it works with no network connection once installed.
 - **Large drawings** — full-size sheets plotted from CAD, with millions
   of line segments, are compiled once and drawn by the GPU, so they open
   in a couple of seconds and stay sharp at any zoom.
+- **Markups stay editable** — a saved note, leader or pen stroke is a
+  real PDF annotation. Open the file again and you can move, reword or
+  delete it; so can Acrobat, Bluebeam or Preview. **Flatten…** saves a
+  copy with the markups painted in for good, and leaves the one you have
+  open alone.
 - **Save** — write back over the file you opened (⌘S), or save a copy
   somewhere else (⇧⌘S). Opening a second file merges it in, and a merged
   document has no single file to save back to, so ⌘S asks where to put
@@ -151,6 +156,9 @@ one document tab into another. It covers the parts that are painful to verify by
 - the plot compiler: that strokes, fills, clips, colours and dashes come
   out as the right geometry, and that what is left for pdf.js to draw is
   layered correctly
+- markups as annotations: written with an appearance stream that fills
+  its rectangle, read back unchanged at every rotation, removed from the
+  document on the way in, flattened on request, and refused when malformed
 - export: page counts, rotations, duplicated source pages, blank pages,
   non-WinAnsi characters, and that batched `copyPages` really is smaller
   than copying per page

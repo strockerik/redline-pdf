@@ -44,7 +44,7 @@ js/persist.js   the few preferences kept between launches (localStorage)
 js/pages.js     import, blank pages, delete, rotate, reorder
 js/view.js      page canvas, zoom, thumbnails, reorder gesture
 js/annots.js    text box + callout tools, pointer interactions
-js/export.js    pdf-lib output
+js/export.js    pdf-lib output, and reading Redline's markups back in
 js/plot.js      heavy vector pages: worker jobs, residual PDF, draw calls
 js/plotcompile.js   content stream -> GPU instances + residual stream; pure,
                     no DOM (runs in the worker and under JavaScriptCore)
@@ -81,6 +81,24 @@ Chrome crash at exit. Don't bring back autosave, and above all don't put
 a `FileSystemFileHandle` into IndexedDB. Unsaved work is guarded by the
 `beforeunload` prompt alone, which iOS does not show.
 
+**A saved markup is a PDF annotation, not paint — until it is flattened.**
+Save writes each note, callout and pen stroke as a standard annotation
+(FreeText / Ink) and Redline reads them back as editable markups on open;
+"Flatten…" saves a copy with them painted into the pages instead. Three
+things hold this together (export.js, "Markups that stay editable"):
+- The annotation's appearance stream is drawn by `drawAnnotationOnPage`,
+  the same function that flattens, onto a scratch page that is then lifted
+  into a form XObject whose BBox *is* the annotation's Rect. So both forms
+  look identical and every rotation rule below applies unchanged. Don't
+  grow a second way of drawing a markup.
+- Redline reads back only its private `/RedlineMarkup` entry, never the
+  standard fields. That payload comes from a file someone else may have
+  written: `readPayload` checks every field and builds the markup fresh.
+- On open the annotations are *removed* from the pdf-lib document, and
+  pdf.js is given the document re-serialised without them. Leave them in
+  and each markup is drawn twice — once by pdf.js, once by the editor —
+  and written twice on the next save.
+
 **Anything that arrives from outside waits for boot.** A file opened from
 Finder reaches the launch handler while boot is still running. The handler
 awaits `booted` (main.js) and opens each file in its own tab — never into
@@ -93,7 +111,8 @@ origin top-left, y down, page already rotated). pdf-lib draws in
 **native space** (origin bottom-left, y up, raw MediaBox, *ignoring*
 `/Rotate` — its size getters are not rotation-aware).
 
-- Every point handed to pdf-lib goes through `toNative`.
+- Every point handed to pdf-lib goes through `toNative` — including an
+  annotation's `/Rect`, `/CL` and `/InkList`.
 - Text additionally gets `rotate: degrees(textCompensationDegrees(R))`,
   because glyphs are the only thing with an inherent "up". Rectangles
   and lines never need it.
