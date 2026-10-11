@@ -165,6 +165,11 @@ error that only shows up on 90°/270° pages and is miserable to eyeball.
   disagree. **Everything so far is rev 0**: a deploy takes 0.21 to 0.22.
   The number before the point is the owner's to change; never bump it
   unasked. (Builds up to 0.21 were stamped as bare integers, "rev 21".)
+- **The worker fills its cache with fresh fetches, and checks what came
+  back** (`precache()` in sw.js). Don't go back to `cache.addAll`: it is
+  served from the HTTP cache and the CDN, which for ten minutes after a
+  deploy still hold the previous build — and a cache filled from them is
+  the previous build under the new name, served forever. hazards.md §5.
 - **All paths must stay relative (`./`).** Pages serves from
   `/redline-pdf/`, so an absolute `/js/...` works locally and 404s in
   production.

@@ -15,7 +15,7 @@ if [ ! -x "$JSC" ]; then
 fi
 
 fail=0
-for t in run_imports run_rotmath run_geometry run_rotate run_view run_plot run_history run_export; do
+for t in run_imports run_rotmath run_geometry run_rotate run_view run_plot run_history run_sw run_export; do
   echo "=== $t ==="
   if ! "$JSC" -m "$t.mjs"; then fail=1; fi
   echo

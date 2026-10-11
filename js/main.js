@@ -155,6 +155,12 @@ function installServiceWorker() {
         }
       });
     });
+    // The browser only looks for a new build when the app is launched or
+    // reloaded. An installed app is often left open for days, so look
+    // again whenever its window comes back to the front.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') reg.update().catch(() => { /* offline */ });
+    });
   }).catch((err) => console.warn('service worker registration failed', err));
 
   $('btnReload').addEventListener('click', () => location.reload());

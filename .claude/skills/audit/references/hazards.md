@@ -156,6 +156,20 @@ undo cannot reach — closing a tab or the window with unsaved work.
   carries. A deploy raises N by one; the 0 changes only on the owner's word.
   It is how a stale installed copy is told from a current one, so a stamp
   left behind is worse than none.
+- **A cache must contain the build it is named for.** Rev 0.24's worker
+  filled its cache with `cache.addAll`, which is answered by whatever
+  copy is nearest — the browser's HTTP cache or the host's CDN, both of
+  which hold a file for ten minutes. A Chrome that was open as the deploy
+  landed installed the new worker inside that window and stored 0.23's
+  files in a cache called v0.24. Cache-first, it then served 0.23 for
+  good: the worker script was already current, so nothing ever triggered
+  another install. Safari, opened later, was fine — which is what made it
+  look like a browser problem. `precache()` in sw.js now fetches every
+  file with `no-store` and the build number in the query, and refuses to
+  install if the page that comes back does not carry its own stamp.
+  `tests/run_sw.mjs` pins all three. Related: checking a deploy with
+  `curl …?t=123` goes round the CDN too, so it says "live" before the
+  plain URLs are.
 - **Keep PRECACHE complete.** `js/tabs.js` shipped missing from it: fine
   online, dead offline. `cache.addAll` is atomic, so a listed-but-missing
   file is just as bad — it fails the whole install.

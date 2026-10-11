@@ -3,8 +3,13 @@
  * Bump CACHE on every deploy. A stale worker quietly serving last week's
  * code is the classic PWA failure; the version bump plus the
  * delete-everything-else pass in `activate` is what prevents it.
+ *
+ * The other half is that a cache must *contain* the build it is named
+ * for. See precache() below: that is not automatic, and getting it wrong
+ * strands an installed app on the previous build for good.
  */
-const CACHE = 'redline-v0.24';
+const CACHE = 'redline-v0.25';
+const VERSION = CACHE.replace('redline-v', '');
 
 const PRECACHE = [
   './',
@@ -38,13 +43,57 @@ const PRECACHE = [
   './icons/favicon.png',
 ];
 
+/** One app-shell file, as it is on the server *now*.
+ *
+ *  A plain fetch is answered from wherever a copy is nearest: the
+ *  browser's own HTTP cache, or the host's CDN, both of which keep a file
+ *  for ten minutes after it was last asked for. A worker that installs
+ *  inside that window — the app was open when the deploy landed — fills
+ *  its new cache with the *previous* build's files. Rev 0.24 did exactly
+ *  that in Chrome: a cache named v0.24 holding 0.23, served cache-first,
+ *  and never corrected, because the worker script itself was already up
+ *  to date and so nothing ever prompted another install.
+ *
+ *  `no-store` goes round the browser's cache. The version in the query
+ *  goes round the CDN's: it has never seen this URL, so it has no old
+ *  copy to offer. */
+async function fetchFresh(url) {
+  const res = await fetch(`${url}${url.includes('?') ? '&' : '?'}v=${VERSION}`, { cache: 'no-store' });
+  if (!res || !res.ok) throw new Error(`precache ${url}: ${res ? res.status : 'no response'}`);
+  return res;
+}
+
+/** Fill this build's cache, or leave nothing behind.
+ *
+ *  Everything is fetched before anything is stored, so one failure stores
+ *  nothing — a half-populated cache is worse than no cache. And the page
+ *  that comes back has to carry this build's own stamp: if it does not,
+ *  the server is still handing out the last build, and installing would
+ *  put it in a cache with this build's name on it. Failing instead leaves
+ *  the previous worker in charge, and the browser tries again on the next
+ *  launch. */
+async function precache() {
+  const fetched = await Promise.all(PRECACHE.map(async (url) => [url, await fetchFresh(url)]));
+  for (const [url, res] of fetched) {
+    if (url !== './' && url !== './index.html') continue;
+    const page = await res.clone().text();
+    if (!page.includes(`rev ${VERSION} ·`)) {
+      throw new Error(`precache ${url}: the server sent a different build than ${VERSION}`);
+    }
+  }
+  const cache = await caches.open(CACHE);
+  // Stored under the plain URL — the one the page actually asks for.
+  await Promise.all(fetched.map(([url, res]) => cache.put(url, res)));
+}
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE)
-      // addAll is atomic — one 404 fails the whole install, which is what
-      // we want: a half-populated cache is worse than no cache.
-      .then((cache) => cache.addAll(PRECACHE))
+    precache()
       .then(() => self.skipWaiting())
+      .catch(async (err) => {
+        await caches.delete(CACHE);
+        throw err;
+      })
   );
 });
 

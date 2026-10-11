@@ -1765,6 +1765,24 @@ def main():
         check("build stamp names the service worker's cache", stamp["text"].startswith(f"rev {stamp['cache']} "),
               f"{stamp['text']!r} vs redline-v{stamp['cache']}")
         check("build stamp repeated on the empty sheet", stamp["empty"] == stamp["text"], stamp["empty"])
+        # The cache has to *contain* the build it is named for. Rev 0.24
+        # filled a cache called v0.24 with 0.23's files, and an installed
+        # app sat on the old build with nothing to tell it otherwise.
+        cached = ev(ws, """(async () => {
+          await navigator.serviceWorker.ready;
+          const name = (await caches.keys()).find((k) => k.startsWith('redline-v'));
+          if (!name) return { name: null };
+          const cache = await caches.open(name);
+          const keys = (await cache.keys()).map((r) => new URL(r.url));
+          const page = await cache.match('./index.html');
+          return { name, n: keys.length, versioned: keys.filter((u) => /[?&]v=/.test(u.search)).length,
+                   stamp: page ? ((await page.text()).match(/id="buildStamp">\\s*(rev [0-9.]+)/) || [])[1] : null,
+                   main: !!(await cache.match('./js/main.js')) };
+        })()""", awaitp=True)
+        check("the worker's cache holds the build it is named for",
+              cached["name"] == f"redline-v{stamp['cache']}" and cached.get("stamp") == f"rev {stamp['cache']}", str(cached))
+        check("with every file stored under the address the page asks for",
+              cached.get("n", 0) >= 25 and cached.get("versioned") == 0 and cached.get("main") is True, str(cached))
         shot(ws, "01-boot")
 
         # ---------------------------------------------- 2. save guard
