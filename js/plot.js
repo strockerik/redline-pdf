@@ -169,7 +169,10 @@ async function finish(rec, m) {
   try {
     const layers = m.layers.map((box, k) => ({ box, k })).filter((l) => l.box);
     if (layers.length > MAX_LAYERS) throw new Error('too many image layers');
-    const hasAnnots = !!rec.src.pdfLibDoc.getPage(rec.index).node.Annots();
+    // An empty list is what a page is left with once Redline's own markups
+    // have been lifted out of it; it is not a reason to draw a text layer.
+    const annots = rec.src.pdfLibDoc.getPage(rec.index).node.Annots();
+    const hasAnnots = !!annots && annots.size() > 0;
     if (layers.length || m.text || hasAnnots) {
       await buildResidual(rec, m.residual, m.layers.length);
       if (rec.gen !== gen) return;

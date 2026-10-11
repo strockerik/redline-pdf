@@ -328,8 +328,14 @@ function wireUi() {
     refreshActiveTab();
   });
 
+  // Every open document, not only the one on screen. Nothing is kept
+  // between launches, so this prompt is all that stands between a
+  // background tab's unsaved notes and the window closing on them. The
+  // active document's truth is in `state`; the others' is in their records.
   window.addEventListener('beforeunload', (e) => {
-    if (!state.dirty || !state.pages.length) return;
+    const unsaved = (state.dirty && state.pages.length > 0)
+      || state.docs.some((d) => d.id !== state.activeDocId && d.dirty && d.pages.length > 0);
+    if (!unsaved) return;
     e.preventDefault();
     e.returnValue = '';
   });

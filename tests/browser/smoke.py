@@ -630,6 +630,22 @@ def tab_checks(ws):
     check("and swaps the page list", d["pages"] == 3, f"{d['pages']} pages")
     check("the title follows the tab",
           ev(ws, "document.getElementById('docTitle').textContent") == "alpha.pdf")
+    # beta has an unsaved blank page and is now in the background. Closing
+    # the window must still ask: with nothing saved between launches, that
+    # prompt is the only thing between a background tab and lost work.
+    guard = ev(ws, """(async () => {
+      const { state } = await import('./js/state.js');
+      const ask = () => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; };
+      const background = ask();
+      const saved = state.docs.map((d) => d.dirty), mine = state.dirty;
+      state.docs.forEach((d) => { d.dirty = false; }); state.dirty = false;
+      const allClean = ask();
+      state.docs.forEach((d, i) => { d.dirty = saved[i]; }); state.dirty = mine;
+      return { activeDirty: mine, background, allClean };
+    })()""", awaitp=True)
+    check("closing asks first when a background tab has unsaved work",
+          guard["activeDirty"] is False and guard["background"] is True, str(guard))
+    check("and does not ask when every document is saved", guard["allClean"] is False, str(guard))
     check("thumbnails belong to the newly active document",
           ev(ws, "document.querySelectorAll('#thumbList .thumb').length") == 3,
           f"{ev(ws, 'document.querySelectorAll(\'#thumbList .thumb\').length')} thumbs")
@@ -807,6 +823,36 @@ def heavy_page_checks(ws, plot):
 
     n = ev(ws, "window.__heavyRenders")
     check("zoom and rotation never sent the page back through pdf.js", n == 0, f"{n} pdf.js render(s)")
+
+    if plot:
+        # Once its markups are lifted out, a page is left with an empty
+        # annotation list. That is not "has annotations": a sheet with no
+        # text and nothing else to show needs no text layer drawn or held
+        # on the GPU.
+        layer = ev(ws, """(async () => {
+          const tabs = await import('./js/tabs.js'), pages = await import('./js/pages.js');
+          const { state, markDirty } = await import('./js/state.js'), plots = await import('./js/plot.js');
+          const { buildPdfBytes } = await import('./js/export.js');
+          const heavy = state.pages[state.pages.length - 1];
+          heavy.annotations.push({ id: state.nextAnnoId++, type: 'ink', color: '#1a7f37', size: 5,
+                                   points: [{ x: 400, y: 100 }, { x: 460, y: 160 }] });
+          const bytes = await buildPdfBytes();
+          heavy.annotations.pop();
+          markDirty(false);
+          tabs.openDocument();
+          await pages.importPdfBytes(bytes.slice().buffer, 'resaved.pdf');
+          const page = state.pages[state.pages.length - 1];
+          pages.selectPage(page.id);
+          const src = state.sources.find((s) => s.id === page.sourceId);
+          const rec = plots.plotRecord(src, page.sourcePageIndex);
+          for (let i = 0; i < 300 && rec.state !== 'ready'; i++) await new Promise((r) => setTimeout(r, 100));
+          const annots = src.pdfLibDoc.getPage(page.sourcePageIndex).node.Annots();
+          return { state: rec.state, annots: annots ? annots.size() : null, text: !!(rec.page && rec.page.text),
+                   markups: page.annotations.length };
+        })()""", awaitp=True)
+        check("the sheet's one markup came back, leaving its annotation list empty",
+              layer["state"] == "ready" and layer["markups"] == 1 and layer["annots"] == 0, str(layer))
+        check("and an empty list does not earn it a text layer", layer["text"] is False, str(layer))
     shot(ws, "heavy-page-plot" if plot else "heavy-page-fallback")
 
 

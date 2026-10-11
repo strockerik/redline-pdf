@@ -222,6 +222,10 @@ launch starts empty; `persist.js` keeps four preferences in localStorage.
 - **Is transient state leaking into what is kept?** Preferences only. A
   zoom level is not one — it belonged to a document that is gone, and
   restoring it opened the next file at 600%.
+- **The guard has to cover every tab.** It once looked only at the
+  active document, so notes in a background tab went with the window and
+  nothing said so. While sessions were saved that was survivable; once
+  they were not, it was plain data loss.
 - **Unsaved work has one guard: `beforeunload`.** It prompts on desktop.
   iOS shows no such prompt and evicts backgrounded web apps without
   warning, so on a phone unsaved notes can be lost. That trade was made
