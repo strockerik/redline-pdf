@@ -23,6 +23,7 @@ export const COLOR_NAMES = {
 export const ANNO_PAD = 6;             // pt, padding inside a text box
 export const LINE_HEIGHT_MULT = 1.28;  // multiplier of font size
 export const DEFAULT_BOX_WIDTH = 170;  // pt
+export const LEADER_JOG = 10;          // pt, the level run where a leader meets its note
 export const THUMB_WIDTH = 150;        // px
 
 // Pen stroke widths in pt, and the closest distance between two recorded
@@ -279,16 +280,31 @@ export function estimateBoxHeight(anno) {
   return Math.max(1, count) * anno.fontSize * LINE_HEIGHT_MULT + ANNO_PAD * 2;
 }
 
-/** Which edge-midpoint of the box a leader line attaches to, based on
- *  which side of the box the tip is on. */
-export function computeAttachPoint(anno, boxHeight) {
+/** A callout's leader, as a drafter draws one: out of the side of the box
+ *  on a short level run — the jog, or landing — to a knee, and from the
+ *  knee to the tip.
+ *
+ *  It always leaves from the left or the right side, at mid-height: the
+ *  side the tip is on. A tip directly above or below the note still gets a
+ *  level jog first; a leader leaving from the top or bottom edge has
+ *  nowhere to put one. The jog shortens when the tip is closer to the box
+ *  than a full jog, so the knee never overshoots it.
+ *
+ *  The editor, the preview and the exporter all take the leader from
+ *  here, in visual space, where "level" means what it says whichever way
+ *  the page is turned. */
+export function computeLeader(anno, boxHeight) {
   const cx = anno.x + anno.width / 2;
   const cy = anno.y + boxHeight / 2;
-  const dx = anno.tipX - cx, dy = anno.tipY - cy;
-  if (Math.abs(dx) >= Math.abs(dy)) {
-    return dx >= 0 ? { x: anno.x + anno.width, y: cy } : { x: anno.x, y: cy };
-  }
-  return dy >= 0 ? { x: cx, y: anno.y + boxHeight } : { x: cx, y: anno.y };
+  const dir = anno.tipX >= cx ? 1 : -1;
+  const attach = { x: dir > 0 ? anno.x + anno.width : anno.x, y: cy };
+  const beyond = (anno.tipX - attach.x) * dir;       // how far past that edge the tip is
+  const jog = beyond > 0 ? Math.min(LEADER_JOG, beyond / 2) : LEADER_JOG;
+  return {
+    attach,
+    knee: { x: attach.x + dir * jog, y: cy },
+    tip: { x: anno.tipX, y: anno.tipY },
+  };
 }
 
 export function computeArrowWings(attach, tip, len = 9, angleDeg = 27) {

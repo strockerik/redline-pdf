@@ -2,7 +2,7 @@
  * (with pointer-based reorder that works under both mouse and finger).
  */
 import {
-  state, setStatus, visualSize, normRot,
+  state, setStatus, visualSize, normRot, finishTyping,
   THUMB_WIDTH, PT_TO_PX, ZOOM_STEPS, MIN_ZOOM, MAX_ZOOM,
 } from './state.js';
 import { renderAnnotationLayer } from './annots.js';
@@ -41,20 +41,109 @@ function computeScale(page) {
   return clamped * PT_TO_PX;
 }
 
-export function setZoomMode(mode) {
-  state.zoomMode = mode;
-  if (mode === 'fit-width' || mode === 'fit-page') state.lastFitMode = mode;
-  renderMainCanvas();
+const clampZoom = (level) => Math.min(Math.max(level, MIN_ZOOM), MAX_ZOOM);
+
+/** Put the page at `level` now. One frame of a zoom. */
+function applyZoom(level, anchor) {
+  state.zoomMode = 'custom';
+  state.zoomLevel = clampZoom(level);
+  renderMainCanvas({ anchor, zooming: true });
 }
 
-export function setZoomLevel(level, anchor) {
-  state.zoomMode = 'custom';
-  state.zoomLevel = Math.min(Math.max(level, MIN_ZOOM), MAX_ZOOM);
-  renderMainCanvas({ anchor });
+// ---- Zoom is a movement, not a cut ----
+//
+// A zoom that jumps from one size to the next tells the eye nothing about
+// how far it went: the sheet is simply different, and the thing being
+// looked at has to be found again. So every zoom that arrives as a step —
+// a wheel notch, a button, a key, a fit mode — is eased to its target
+// over a few frames, about the point it was aimed at. The linework grows
+// or shrinks on screen, and how much it moved is how much was zoomed.
+//
+// It is an exponential approach rather than a fixed-length tween, so a
+// run of wheel notches keeps moving the target and the page keeps
+// chasing it, without one animation queueing behind another.
+//
+// Each frame is cheap for every kind of page: see "Resizing" below.
+const ZOOM_EASE_MS = 55;          // time constant: ~95% of the way in three of these
+const zoomAnim = { raf: 0, target: null, anchor: undefined, last: 0, done: null };
+
+const prefersStillness = () => !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+function stopZoomAnim() {
+  cancelAnimationFrame(zoomAnim.raf);
+  zoomAnim.raf = 0;
+  zoomAnim.target = null;
+  zoomAnim.done = null;
+}
+
+/** Ease to `level`, holding `anchor` (a point in the stage) still. `done`
+ *  runs once it has arrived — unless another zoom takes over first. */
+function zoomToward(level, anchor, done = null) {
+  const target = clampZoom(level);
+  const page = state.pages.find((p) => p.id === state.selectedPageId);
+  if (!page || prefersStillness()) {
+    stopZoomAnim();
+    if (page) applyZoom(target, anchor);
+    if (done) done();
+    return;
+  }
+  zoomAnim.target = target;
+  zoomAnim.anchor = anchor;
+  zoomAnim.done = done;
+  if (zoomAnim.raf) return;                 // already moving: it now has a new target
+  zoomAnim.last = performance.now();
+  const frame = (now) => {
+    const dt = Math.min(64, Math.max(1, now - zoomAnim.last));
+    zoomAnim.last = now;
+    const to = zoomAnim.target;
+    // In log space, so 50% -> 100% moves like 100% -> 200%.
+    const gap = Math.log(to / state.zoomLevel);
+    const arrived = Math.abs(gap) < 0.004;
+    applyZoom(arrived ? to : state.zoomLevel * Math.exp(gap * (1 - Math.exp(-dt / ZOOM_EASE_MS))), zoomAnim.anchor);
+    if (!arrived) { zoomAnim.raf = requestAnimationFrame(frame); return; }
+    const after = zoomAnim.done;
+    stopZoomAnim();
+    if (after) after();
+  };
+  zoomAnim.raf = requestAnimationFrame(frame);
+}
+
+/** Where the zoom is headed — which, mid-movement, is not where it is. A
+ *  second step taken before the first has landed starts from here. */
+const zoomGoal = () => (zoomAnim.target ?? state.zoomLevel);
+
+/** The zoom a fit mode works out to for the page on screen. */
+function fitLevel(mode, page) {
+  const { w: Wv, h: Hv } = visualSize(page.rotation, page.W0, page.H0);
+  const stage = $('canvasStage');
+  const availW = Math.max(120, stage.clientWidth - STAGE_PAD * 2);
+  const availH = Math.max(120, stage.clientHeight - STAGE_PAD * 2);
+  const scale = mode === 'fit-width' ? availW / Wv : Math.min(availW / Wv, availH / Hv);
+  return clampZoom(scale / PT_TO_PX);
+}
+
+export function setZoomMode(mode) {
+  const fit = mode === 'fit-width' || mode === 'fit-page';
+  // Recorded at once, not when the movement ends: the wheel keys off it.
+  if (fit) state.lastFitMode = mode;
+  const page = state.pages.find((p) => p.id === state.selectedPageId);
+  const settle = () => { state.zoomMode = mode; renderMainCanvas(); };
+  if (!fit || !page) { stopZoomAnim(); settle(); return; }
+  // Glide to the size the fit works out to, then hand over to the mode
+  // itself, which keeps the page fitted as the window changes.
+  zoomToward(fitLevel(mode, page), undefined, settle);
+}
+
+/** Zoom to `level` about `anchor` (stage coordinates; its centre if none).
+ *  Eased, unless `instant` — for input that is already continuous, like a
+ *  pinch, where easing would only make the page lag the fingers. */
+export function setZoomLevel(level, anchor, { instant = false } = {}) {
+  if (instant) { stopZoomAnim(); applyZoom(level, anchor); return; }
+  zoomToward(level, anchor);
 }
 
 export function zoomStep(dir) {
-  const cur = state.zoomLevel;
+  const cur = zoomGoal();
   let next;
   if (dir > 0) next = ZOOM_STEPS.find((z) => z > cur + 1e-4);
   else next = [...ZOOM_STEPS].reverse().find((z) => z < cur - 1e-4);
@@ -546,10 +635,16 @@ export function renderMainCanvas(opts = {}) {
   const emptyState = $('emptyState');
   const pageStack = $('pageStack');
 
-  updateToolbarState();
+  // One frame of a zoom changes nothing the toolbar shows but the
+  // percentage, which the layout below updates itself. Redrawing the
+  // whole command surface sixty times a second — the markups list
+  // included — is what a zoom has no time for.
+  const resizing = !!page && !!held && held.page === page && held.rotation === page.rotation;
+  if (!(opts.zooming && resizing)) updateToolbarState();
 
   if (!page) {
     shown = null;
+    held = null;
     hidePlot();
     emptyState.style.display = 'block';
     pageStack.style.display = 'none';
@@ -564,23 +659,55 @@ export function renderMainCanvas(opts = {}) {
   if (activeRenderTask) {
     try { activeRenderTask.cancel(); } catch { /* already settled */ }
   }
+  wakeSettle();
 
-  const run = renderQueue.then(() => paintPage(page, token, opts));
+  // Resizing: the canvas already shows this page, this way up, and only
+  // its size is changing. Lay it out at the new size *now*, in this call,
+  // with the pixels it has — the browser stretches them — and let the
+  // sharp ones follow. That is what makes a zoom read as one movement:
+  // every frame of it is on screen the moment it is asked for, instead of
+  // waiting its turn behind a pdf.js render that is about to be thrown
+  // away. See paintPage for the other half.
+  if (resizing) layoutPage(page, opts);
+
+  const run = renderQueue.then(() => paintPage(page, token, opts, resizing));
   renderQueue = run.then(() => {}, () => {});   // a failure must not jam the queue
   return run;
 }
 
-async function paintPage(page, token, opts) {
-  // Superseded while queued: a newer call is already on its way.
-  if (token !== renderToken) return;
+// What #pageCanvas is showing: { page, rotation, backing } once a page has
+// been drawn into it in full, null while it holds anything else. Keyed by
+// the page object, like every other cache here — ids restart per document.
+// `backing` is the resolution it was drawn at, so a call that changes
+// nothing about the pixels (an undo, a markup edit) draws none.
+let held = null;
 
+// The pause before a resized page is redrawn sharp. A zoom arrives as a
+// burst of sizes a few milliseconds apart; starting a full-resolution
+// pdf.js render for each, only to cancel it, is work that shows up as
+// dropped frames. So the sharp render waits until the sizes stop coming.
+const ZOOM_SETTLE_MS = 90;
+let wakeSettle = () => {};
+const settle = (ms) => new Promise((resolve) => {
+  const timer = setTimeout(resolve, ms);
+  // The next render does not wait this one's pause out.
+  wakeSettle = () => { clearTimeout(timer); resolve(); };
+});
+
+/** Size and place everything for `page` at the current zoom: the canvas's
+ *  box, the stack, the markup layer and the scroll position. No pixels —
+ *  whatever #pageCanvas holds is stretched to the new box. */
+function layoutPage(page, opts) {
+  // The markup layer is about to be rebuilt; a note being typed into
+  // would go with it, text and all.
+  finishTyping();
   const pageStack = $('pageStack');
   const { w: Wv, h: Hv } = visualSize(page.rotation, page.W0, page.H0);
   const scale = computeScale(page);
   state.currentScale = scale;
   updateZoomReadout();
 
-  // Record the scroll anchor before the canvas resizes under us.
+  // Record the scroll anchor before the page resizes under us.
   const stage = $('canvasStage');
   const prevW = pageStack.offsetWidth || 1;
   const prevH = pageStack.offsetHeight || 1;
@@ -589,12 +716,61 @@ async function paintPage(page, token, opts) {
   const relX = (stage.scrollLeft + anchorX) / prevW;
   const relY = (stage.scrollTop + anchorY) / prevH;
 
-  const dpr = window.devicePixelRatio || 1;
+  const cssW = Math.round(Wv * scale);
+  const cssH = Math.round(Hv * scale);
+
+  // Backing store is at device resolution; layout stays in logical px so
+  // the annotation overlay's pt * currentScale math is unaffected.
+  const canvas = $('pageCanvas');
+  canvas.style.width = cssW + 'px';
+  canvas.style.height = cssH + 'px';
+  pageStack.style.width = cssW + 'px';
+  pageStack.style.height = cssH + 'px';
+  pageStack.style.transform = '';
+
+  const overlay = $('annoLayer');
+  overlay.style.width = cssW + 'px';
+  overlay.style.height = cssH + 'px';
+  $('leaderSvg').setAttribute('viewBox', `0 0 ${cssW} ${cssH}`);
+  $('hiliteSvg').setAttribute('viewBox', `0 0 ${cssW} ${cssH}`);
+
+  renderAnnotationLayer(page);
+
+  // Restore the anchor point to roughly where it was pre-zoom.
+  if (opts.anchor || state.zoomMode === 'custom') {
+    stage.scrollLeft = relX * cssW - anchorX;
+    stage.scrollTop = relY * cssH - anchorY;
+  }
+  return { scale, cssW, cssH, Wv, Hv };
+}
+
+async function paintPage(page, token, opts, resizing) {
+  // Superseded while queued: a newer call is already on its way.
+  if (token !== renderToken) return;
+
+  const pageStack = $('pageStack');
   const canvas = $('pageCanvas');
   const ctx = canvas.getContext('2d');
 
-  const cssW = Math.round(Wv * scale);
-  const cssH = Math.round(Hv * scale);
+  // Layout first, pixels after. A page being resized was laid out by
+  // renderMainCanvas already and must not be again: by now the user may
+  // be dragging a note that a rebuild of the markup layer would drop.
+  let L;
+  if (resizing) {
+    const { w: Wv, h: Hv } = visualSize(page.rotation, page.W0, page.H0);
+    const scale = state.currentScale;
+    L = { scale, cssW: Math.round(Wv * scale), cssH: Math.round(Hv * scale), Wv, Hv };
+  } else {
+    // A different page, or this one turned: what the canvas holds is not
+    // this page at any size. Blank it before the new layout is seen, so
+    // the last page's pixels are never shown under this page's markups.
+    held = null;
+    canvas.width = canvas.height = 2;
+    L = layoutPage(page, opts);
+  }
+  const { scale, cssW, cssH, Wv, Hv } = L;
+
+  const dpr = window.devicePixelRatio || 1;
   // Past the browser's canvas limits the backing store stops growing and
   // the CSS size alone carries the zoom. A large sheet at 800% would
   // otherwise ask for a canvas Chrome silently declines to draw into.
@@ -630,7 +806,7 @@ async function paintPage(page, token, opts) {
     setRenderingBadge(plot.state !== 'ready');
   } else if (heavy) {
     // No pdf.js here: the page is drawn from its master, which may still
-    // be filling in. Everything below — layout, the annotation layer —
+    // be filling in. Everything else — layout, the annotation layer —
     // carries on regardless, so the page can be marked up while it does.
     ensureMaster(heavy);
     const s = Math.min(backing, masterScale(page.W0, page.H0));
@@ -639,18 +815,30 @@ async function paintPage(page, token, opts) {
     drawRotated(canvas, heavy.canvas, page.rotation);
     setRenderingBadge(heavy.state !== 'done');
   } else {
+    // An ordinary page, through pdf.js. Resized, it is redrawn out of
+    // sight and swapped in whole: drawing straight onto the canvas would
+    // clear it first, and the page would blink white at every step of a
+    // zoom. And not until the sizes have stopped coming.
+    if (resizing) {
+      // Already sharp at this size: there is nothing to draw.
+      if (held.backing === backing) return;
+      await settle(ZOOM_SETTLE_MS);
+      if (token !== renderToken) return;
+    }
     const src = state.sources.find((s) => s.id === page.sourceId);
     const pjPage = await src.pdfjsDoc.getPage(page.sourcePageIndex + 1);
     if (token !== renderToken) return;
     // rotation here is absolute — it overrides the page's own /Rotate
     const viewport = pjPage.getViewport({ scale: backing, rotation: normRot(page.rotation) });
-    canvas.width = Math.round(viewport.width);
-    canvas.height = Math.round(viewport.height);
-    const task = pjPage.render({ canvasContext: ctx, viewport });
+    const target = resizing ? document.createElement('canvas') : canvas;
+    target.width = Math.round(viewport.width);
+    target.height = Math.round(viewport.height);
+    const task = pjPage.render({ canvasContext: target.getContext('2d'), viewport });
     activeRenderTask = task;
     try {
       await task.promise;
     } catch (err) {
+      if (target !== canvas) target.width = target.height = 0;      // give the memory back now
       if (err && err.name === 'RenderingCancelledException') return;
       // Loud, but not fatal: one failed render must not reject the promise
       // every caller ignores, and must not stop the queue.
@@ -659,30 +847,18 @@ async function paintPage(page, token, opts) {
     } finally {
       if (activeRenderTask === task) activeRenderTask = null;
     }
-    if (token !== renderToken) return;
+    if (token !== renderToken) {
+      if (target !== canvas) target.width = target.height = 0;
+      return;
+    }
+    if (target !== canvas) {
+      canvas.width = target.width;
+      canvas.height = target.height;
+      ctx.drawImage(target, 0, 0);
+      target.width = target.height = 0;
+    }
   }
-
-  // Backing store is at device resolution; layout stays in logical px so
-  // the annotation overlay's pt * currentScale math is unaffected.
-  canvas.style.width = cssW + 'px';
-  canvas.style.height = cssH + 'px';
-  pageStack.style.width = cssW + 'px';
-  pageStack.style.height = cssH + 'px';
-  pageStack.style.transform = '';
-
-  const overlay = $('annoLayer');
-  overlay.style.width = cssW + 'px';
-  overlay.style.height = cssH + 'px';
-  $('leaderSvg').setAttribute('viewBox', `0 0 ${cssW} ${cssH}`);
-  $('hiliteSvg').setAttribute('viewBox', `0 0 ${cssW} ${cssH}`);
-
-  renderAnnotationLayer(page);
-
-  // Restore the anchor point to roughly where it was pre-zoom.
-  if (opts.anchor || state.zoomMode === 'custom') {
-    stage.scrollLeft = relX * cssW - anchorX;
-    stage.scrollTop = relY * cssH - anchorY;
-  }
+  held = { page, rotation: page.rotation, backing };
 
   // Last, once the page has its final size and scroll position: the plot
   // canvas is placed by where the page actually sits in the stage.
@@ -730,7 +906,11 @@ export function installStageGestures(onPageStep) {
     const anchor = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     const d = fine ? e.deltaY
                    : Math.max(-50, Math.min(50, e.deltaY)) * 0.35;
-    setZoomLevel(state.zoomLevel * Math.exp(-d * 0.01), anchor);
+    // A pinch is already a stream of small steps and must track the
+    // fingers. A wheel notch is one big step: it moves the *goal*, and the
+    // page glides after it, so a spin of the wheel is one smooth zoom.
+    if (fine) setZoomLevel(state.zoomLevel * Math.exp(-d * 0.01), anchor, { instant: true });
+    else setZoomLevel(zoomGoal() * Math.exp(-d * 0.01), anchor);
   };
 
   // One flick of a trackpad is a burst of small deltas, so accumulate to a
@@ -843,7 +1023,8 @@ export function installStageGestures(onPageStep) {
       pinchStart = null;
       pageStack.style.transform = '';
       stage.style.touchAction = '';
-      if (Math.abs(ratio - 1) > 0.01) setZoomLevel(had.zoom * ratio, had.anchor);
+      // The transform has been showing this size all along; cut to it.
+      if (Math.abs(ratio - 1) > 0.01) setZoomLevel(had.zoom * ratio, had.anchor, { instant: true });
     }
   };
   stage.addEventListener('pointerup', endPinch);

@@ -211,6 +211,24 @@ error that only shows up on 90°/270° pages and is miserable to eyeball.
   fit mode the user last *chose*; `zoomMode` flips to `'custom'` the moment
   anything zooms, so reading it there would make one wheel-zoom in Fit W
   silently change what the wheel does next.
+- **A leader always leaves the side of its note, on a level jog**
+  (`computeLeader` in state.js: attach → knee → tip). Never the top or
+  bottom edge — there is nowhere to put a jog there. The editor, the
+  placement preview and the exporter all take the three points from that
+  one function; the arrowhead is aimed along knee → tip.
+- **A zoom is laid out before it is drawn.** When the canvas already
+  holds the page (`held` in view.js) a size change is applied at once —
+  CSS stretches the pixels it has — and the sharp pdf.js render happens
+  off-screen after the sizes stop coming, then is swapped in whole.
+  Drawing straight onto `#pageCanvas` clears it first, which is the blink
+  at every step that made zooming read as a series of cuts. Stepped input
+  (wheel notch, button, key, fit mode) is eased toward a moving target
+  (`zoomToward`); a pinch is already continuous and goes straight through.
+  A call that changes no pixels — an undo, a markup edit — draws none.
+- **"Shrink to text" is a standing instruction.** While it is on, any
+  note that is typed into and finished is shrunk, whenever it was made;
+  dragging out a text box does not pick a width; turning it off leaves
+  the selected note fixed with a little slack.
 - **A note with `fit: true` has no width of its own.** It shrinks to its
   text: on screen the browser lays it out and `a.width` follows
   (`syncFit`), and in the file export.js sizes it from the PDF font

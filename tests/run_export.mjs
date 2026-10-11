@@ -474,7 +474,10 @@ try {
   const doc = await PDFDocument.load(await buildPdfBytes());
   const an = ours(doc.getPage(0))[0];
   const cl = an.lookup(N('CL')).asArray().map((n) => n.asNumber());
-  check('a shrunk callout\'s leader leaves from the edge of the box as drawn', near(cl[2], 40 + want, 0.05), `${cl[2]} vs ${40 + want}`);
+  // Tip, knee, end: the end is on the box's edge, the knee a jog beyond it.
+  check('a callout line is tip, knee and end', cl.length === 6 && near(cl[0], 500), String(cl));
+  check('a shrunk callout\'s leader leaves from the edge of the box as drawn', near(cl[4], 40 + want, 0.05), `${cl[4]} vs ${40 + want}`);
+  check('on a level jog to its knee', near(cl[2], 40 + want + stateMod.LEADER_JOG, 0.05) && near(cl[3], cl[5]), `${cl[2]}, ${cl[3]} / ${cl[5]}`);
   const rect = an.lookup(N('Rect')).asArray().map((n) => n.asNumber());
   check('and its rectangle holds the box and the tip', rect[0] <= 40 && rect[2] >= 500);
   const back = takeMarkups(doc).get(0)[0].markup;

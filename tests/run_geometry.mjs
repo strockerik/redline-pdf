@@ -107,11 +107,24 @@ for (const R of [0, 90, 180, 270]) {
   const callout = { ...anno, type: 'callout', tipX: 300, tipY: 500 };
   const page = recorder();
   drawAnnotationOnPage(page, font, callout, R, W0, H0);
-  check(`callout draws leader + 2 wings R=${R}`, page.calls.lines.length === 3,
+  check(`callout draws leader, 2 wings and a jog R=${R}`, page.calls.lines.length === 4,
     `${page.calls.lines.length} lines`);
 
   // The leader's far end and both wing origins must all be the tip.
-  const [leader, w1, w2] = page.calls.lines;
+  const [leader, w1, w2, jog] = page.calls.lines;
+  // The jog runs from the box to the knee, where the leader takes over.
+  check(`jog meets the leader at the knee R=${R}`, near(jog.end.x, leader.start.x) && near(jog.end.y, leader.start.y));
+  const jogLen = Math.hypot(jog.end.x - jog.start.x, jog.end.y - jog.start.y);
+  check(`jog is the 10pt landing R=${R}`, near(jogLen, 10), `${jogLen}`);
+  // Level as the reader sees it: along native x on an upright or
+  // upside-down page, along native y on one turned on its side.
+  const level = (R === 0 || R === 180) ? near(jog.start.y, jog.end.y) : near(jog.start.x, jog.end.x);
+  check(`jog is level to the reader R=${R}`, level,
+    `(${jog.start.x.toFixed(1)},${jog.start.y.toFixed(1)}) -> (${jog.end.x.toFixed(1)},${jog.end.y.toFixed(1)})`);
+  // And it starts on the box's edge, not inside or short of it.
+  const r = page.calls.rects[0];
+  const onEdge = near(jog.start.x, r.x) || near(jog.start.x, r.x + r.width) || near(jog.start.y, r.y) || near(jog.start.y, r.y + r.height);
+  check(`jog starts on the edge of the box R=${R}`, onEdge);
   const tipMatches = near(leader.end.x, w1.start.x) && near(leader.end.y, w1.start.y) &&
                      near(leader.end.x, w2.start.x) && near(leader.end.y, w2.start.y);
   check(`arrowhead anchored at tip R=${R}`, tipMatches,
@@ -215,6 +228,29 @@ for (const R of [0, 90, 180, 270]) {
   const page = recorder();
   drawAnnotationOnPage(page, font, { ...ink, points: [] }, 0, W0, H0);
   check('empty ink draws nothing', page.calls.lines.length === 0);
+}
+
+// --- A callout's leader: side, jog and knee, in visual space ---
+{
+  const { computeLeader, LEADER_JOG } = await import(`${APP}/state.js`);
+  const box = { x: 200, y: 300, width: 170 };          // 30pt tall: mid-height is y=315
+  const lead = (tipX, tipY) => computeLeader({ ...box, tipX, tipY }, 30);
+
+  let l = lead(500, 500);
+  check('a tip to the right leaves from the right side, at mid-height', near(l.attach.x, 370) && near(l.attach.y, 315));
+  check('on a level jog away from the box', near(l.knee.x, 370 + LEADER_JOG) && near(l.knee.y, 315));
+  l = lead(50, 100);
+  check('a tip to the left leaves from the left side', near(l.attach.x, 200) && near(l.knee.x, 200 - LEADER_JOG) && near(l.knee.y, 315));
+  // Straight above or below there is no top or bottom attachment to fall
+  // back on: the leader still leaves a side, on a jog.
+  l = lead(230, 100);
+  check('a tip above the box still leaves a side, on a full jog', near(l.attach.x, 200) && near(l.knee.x, 200 - LEADER_JOG) && near(l.attach.y, 315));
+  l = lead(340, 600);
+  check('and one below its right half leaves the right', near(l.attach.x, 370) && near(l.knee.x, 370 + LEADER_JOG));
+  // Close in, a full jog would carry the knee past the tip.
+  l = lead(376, 330);
+  check('a tip closer than a jog shortens it rather than overshooting', l.knee.x > 370 && l.knee.x < 376, `knee ${l.knee.x}`);
+  check('the tip is the tip', near(l.tip.x, 376) && near(l.tip.y, 330));
 }
 
 // --- Point shapes: the lines the editor and the exporter both stroke ---

@@ -23,7 +23,8 @@ and it works with no network connection once installed.
   sizes, three line weights. A tool stays in hand until you put it away
   (Esc), so twenty callouts are twenty placements. A callout shows its
   whole leader between the two clicks, so you can see how it will sit
-  before you commit. Notes get a white fill so they read over dense
+  before you commit; the leader meets its note on a short level jog, the
+  way a drafter draws one. Notes get a white fill so they read over dense
   linework, and can shrink to the width of their text; ⌘Return finishes
   one without reaching for the mouse, ⌘D duplicates it, ⌘C / ⌘V carries it
   to another sheet.
@@ -32,7 +33,8 @@ and it works with no network connection once installed.
 - **Find your way** — a page field (type a number, press Return), and a
   **Markups** list of every markup in the document; click one to go to it.
 - **Zoom** — fit width, fit page, 25–600% in steps, pinch on trackpad
-  and touchscreen.
+  and touchscreen. A zoom is a movement rather than a jump: the sheet
+  grows or shrinks about the pointer, so you can see how far it went.
 - **Large drawings** — full-size sheets plotted from CAD, with millions
   of line segments, are compiled once and drawn by the GPU, so they open
   in a couple of seconds and stay sharp at any zoom.

@@ -14,7 +14,7 @@
  * changes nothing leaves nothing to undo.
  */
 import {
-  state, markDirty, computeAttachPoint, computeArrowWings, shapePolylines,
+  state, markDirty, computeLeader, computeArrowWings, shapePolylines,
   isPointShape, sizeForType, TOOL_TYPE,
   ANNO_PAD, LINE_HEIGHT_MULT, DEFAULT_BOX_WIDTH, PEN_MIN_POINT_DIST, HIGHLIGHT_OPACITY,
 } from './state.js';
@@ -99,12 +99,13 @@ function buildNoteDom(page, a) {
 
   overlay.appendChild(box);
 
-  let lineEl = null, wing1 = null, wing2 = null, tipHandle = null;
+  let lineEl = null, wing1 = null, wing2 = null, jogEl = null, tipHandle = null;
   if (a.type === 'callout') {
     lineEl = document.createElementNS(SVG_NS, 'line');
     wing1 = document.createElementNS(SVG_NS, 'line');
     wing2 = document.createElementNS(SVG_NS, 'line');
-    for (const l of [lineEl, wing1, wing2]) {
+    jogEl = document.createElementNS(SVG_NS, 'line');
+    for (const l of [lineEl, wing1, wing2, jogEl]) {
       l.setAttribute('stroke', a.color);
       l.setAttribute('stroke-width', '1.6');
       l.setAttribute('stroke-linecap', 'round');
@@ -118,7 +119,7 @@ function buildNoteDom(page, a) {
     svg.appendChild(tipHandle);
   }
 
-  state.domRefs[a.id] = { boxEl: box, textEl: text, lineEl, wing1, wing2, tipHandle };
+  state.domRefs[a.id] = { boxEl: box, textEl: text, lineEl, wing1, wing2, jogEl, tipHandle };
   syncFit(a, box);
   updateLeaderVisual(page, a);
 
@@ -209,6 +210,18 @@ function wireNoteInteractions(page, a, els) {
     }
     a.text = typed;
     text.classList.remove('placeholder');
+    // "Shrink to text" is a standing instruction, not a property a note
+    // had to be born with: while it is on, any note that is typed into
+    // and finished — by ⌘Return, Esc or a click away — is pulled in to
+    // its text. Otherwise a note placed before the box was ticked, or one
+    // from a file saved earlier, would sit there at its old width looking
+    // as though the option did nothing. (Part of the same undo step as the
+    // typing, which was checkpointed before either.)
+    if (state.currentFit && !a.fit && typed !== before) {
+      a.fit = true;
+      box.classList.add('fit');
+      box.style.width = '';
+    }
     syncFit(a, box);
     if (typed !== before) {
       if (!wasFresh && was) commit(was, 'Edit note');
@@ -371,15 +384,20 @@ function updateLeaderVisual(page, a) {
   // re-deriving it from a word-wrap estimate.
   const hPx = refs.boxEl.offsetHeight
     || (a.fontSize * LINE_HEIGHT_MULT + ANNO_PAD * 2) * scale;
-  const attach = computeAttachPoint(a, hPx / scale);
-  const tip = { x: a.tipX, y: a.tipY };
+  const { attach, knee, tip } = computeLeader(a, hPx / scale);
 
-  refs.lineEl.setAttribute('x1', attach.x * scale);
-  refs.lineEl.setAttribute('y1', attach.y * scale);
+  refs.jogEl.setAttribute('x1', attach.x * scale);
+  refs.jogEl.setAttribute('y1', attach.y * scale);
+  refs.jogEl.setAttribute('x2', knee.x * scale);
+  refs.jogEl.setAttribute('y2', knee.y * scale);
+
+  refs.lineEl.setAttribute('x1', knee.x * scale);
+  refs.lineEl.setAttribute('y1', knee.y * scale);
   refs.lineEl.setAttribute('x2', tip.x * scale);
   refs.lineEl.setAttribute('y2', tip.y * scale);
 
-  const [w1, w2] = computeArrowWings(attach, tip);
+  // The head points along the last leg, from the knee.
+  const [w1, w2] = computeArrowWings(knee, tip);
   refs.wing1.setAttribute('x1', tip.x * scale);
   refs.wing1.setAttribute('y1', tip.y * scale);
   refs.wing1.setAttribute('x2', w1.x * scale);
@@ -666,16 +684,24 @@ export function installDrawing() {
  *  while dragging is one line high however far down the pointer goes —
  *  it shows the box that will actually appear, not one it would discard. */
 function beginNoteDrag(e, page) {
+  // With "Shrink to text" on there is no width to choose: the text sets
+  // it. The press is left to the click that follows.
+  if (state.currentFit) return;
   const start = pointAt(e);
+  // A click with an unsteady hand travels a few pixels. That is not a
+  // request for a box a few pixels wide — which, at the minimum width,
+  // wraps a note into a column one word across.
+  const meant = (p) => Math.abs(p.x - start.x) >= MIN_NOTE_WIDTH;
   let ghost = null;
   trackDrag(e, (dx, dy, ev) => {
     const scale = state.currentScale;
+    const p = pointAt(ev);
+    if (!meant(p)) { if (ghost) { ghost.remove(); ghost = null; } return; }
     if (!ghost) {
       ghost = document.createElement('div');
       ghost.className = 'note-ghost';
       $('annoLayer').appendChild(ghost);
     }
-    const p = pointAt(ev);
     ghost.style.left = (Math.min(start.x, p.x) * scale) + 'px';
     ghost.style.top = (start.y * scale) + 'px';
     ghost.style.width = (Math.max(MIN_NOTE_WIDTH, Math.abs(p.x - start.x)) * scale) + 'px';
@@ -683,9 +709,12 @@ function beginNoteDrag(e, page) {
   }, (moved, ev) => {
     if (ghost) ghost.remove();
     if (!moved) return;
-    swallowClick = true;                  // the click that ends this drag places nothing
-    if (ev.type === 'pointercancel') return;
+    if (ev.type === 'pointercancel') { swallowClick = true; return; }
     const p = pointAt(ev);
+    // Too short to have been a drag: the click that follows drops a note
+    // of the ordinary width, as a clean click would.
+    if (!meant(p)) return;
+    swallowClick = true;                  // the click that ends this drag places nothing
     placeNote(page, {
       type: 'text',
       x: Math.min(start.x, p.x), y: start.y,
@@ -736,7 +765,7 @@ export function handleLayerClick(e) {
 }
 
 // ---- callout preview ----
-let preview = null;       // { dot, line, wing1, wing2, box } while a callout is half placed
+let preview = null;       // { dot, line, wing1, wing2, jog, box } while a callout is half placed
 
 function clearCalloutPreview() {
   if (!preview) return;
@@ -752,8 +781,9 @@ function newNoteWidth() {
 
 /** Between a callout's two clicks: the leader, its arrowhead and the
  *  note's outline, following the pointer. Drawn with the same geometry
- *  the placed callout uses — which edge the leader leaves from, where the
- *  head points — so what is shown is what a click at `p` would make.
+ *  the placed callout uses — which side the leader leaves from, its jog,
+ *  where the head points — so what is shown is what a click at `p` would
+ *  make.
  *  With no `p` yet (the first click has only just landed) the tip alone
  *  is marked. */
 function showCalloutPreview(p) {
@@ -773,7 +803,7 @@ function showCalloutPreview(p) {
     };
     const dot = mk('circle');
     dot.setAttribute('r', '3.5');
-    const lines = [mk('line'), mk('line'), mk('line')];
+    const lines = [mk('line'), mk('line'), mk('line'), mk('line')];
     for (const l of lines) {
       l.setAttribute('stroke-width', '1.6');
       l.setAttribute('stroke-linecap', 'round');
@@ -781,27 +811,28 @@ function showCalloutPreview(p) {
     const box = document.createElement('div');
     box.className = 'note-ghost callout-preview';
     $('annoLayer').appendChild(box);
-    preview = { dot, line: lines[0], wing1: lines[1], wing2: lines[2], box };
+    preview = { dot, line: lines[0], wing1: lines[1], wing2: lines[2], jog: lines[3], box };
   }
   preview.dot.setAttribute('fill', colour);
   preview.dot.setAttribute('cx', tip.x * scale);
   preview.dot.setAttribute('cy', tip.y * scale);
 
   const show = (el, on) => { el.style.display = on ? '' : 'none'; };
-  for (const k of ['line', 'wing1', 'wing2', 'box']) show(preview[k], !!p);
+  for (const k of ['line', 'wing1', 'wing2', 'jog', 'box']) show(preview[k], !!p);
   show(preview.dot, !p);
   if (!p) return;
 
   const a = { x: p.x, y: p.y, width: newNoteWidth(), tipX: tip.x, tipY: tip.y };
   const height = state.currentFontSize * LINE_HEIGHT_MULT + ANNO_PAD * 2;
-  const attach = computeAttachPoint(a, height);
-  const [w1, w2] = computeArrowWings(attach, tip);
+  const { attach, knee } = computeLeader(a, height);
+  const [w1, w2] = computeArrowWings(knee, tip);
   const seg = (el, from, to) => {
     el.setAttribute('stroke', colour);
     el.setAttribute('x1', from.x * scale); el.setAttribute('y1', from.y * scale);
     el.setAttribute('x2', to.x * scale); el.setAttribute('y2', to.y * scale);
   };
-  seg(preview.line, attach, tip);
+  seg(preview.jog, attach, knee);
+  seg(preview.line, knee, tip);
   seg(preview.wing1, tip, w1);
   seg(preview.wing2, tip, w2);
   preview.box.style.borderColor = colour;
@@ -1010,8 +1041,15 @@ export function applyAnnoStyle({ color, fontSize, penSize, fill, fit }) {
   if (fontSize && !shape && fontSize !== a.fontSize) next.fontSize = fontSize;
   if (penSize && shape && sizeForType(a.type, penSize) !== a.size) next.size = sizeForType(a.type, penSize);
   if (fill !== undefined && !shape && fill !== (a.fill !== false)) next.fill = fill;
-  // Turned off, the note keeps the width it had shrunk to — as a fixed one.
-  if (fit !== undefined && !shape && fit !== (a.fit === true)) next.fit = fit;
+  if (fit !== undefined && !shape && fit !== (a.fit === true)) {
+    next.fit = fit;
+    // Turned off, the note keeps roughly the width it had shrunk to, as a
+    // fixed one — with a little room. Exactly the width of its text is a
+    // knife-edge: a rounding at another zoom, or the PDF font being a
+    // touch wider than the screen's, and the last word drops to a line
+    // of its own.
+    if (!fit) next.width = Math.ceil(a.width * 1.06) + 2;
+  }
   if (!Object.keys(next).length) { updateToolbarState(); return; }
 
   checkpoint('Change style');

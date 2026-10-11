@@ -14,7 +14,7 @@
  */
 import {
   state, toNative, textCompensationDegrees, hexToRgb01, normRot,
-  computeAttachPoint, computeArrowWings, shapePolylines, isPointShape, POINT_TYPES,
+  computeLeader, computeArrowWings, shapePolylines, isPointShape, POINT_TYPES,
   ANNO_PAD, LINE_HEIGHT_MULT, HIGHLIGHT_OPACITY,
 } from './state.js';
 
@@ -160,15 +160,14 @@ export function drawAnnotationOnPage(pdfPage, font, a, R, W0, H0) {
   }
 
   if (a.type === 'callout') {
-    const attach = computeAttachPoint(a, boxHeight);
-    const tip = { x: a.tipX, y: a.tipY };
-    const p1 = toNative(R, W0, H0, attach.x, attach.y);
-    const p2 = toNative(R, W0, H0, tip.x, tip.y);
-    pdfPage.drawLine({ start: p1, end: p2, thickness: 1.3, color });
-    for (const w of computeArrowWings(attach, tip)) {
-      const wp = toNative(R, W0, H0, w.x, w.y);
-      pdfPage.drawLine({ start: p2, end: wp, thickness: 1.3, color });
-    }
+    // Knee to tip, the head, then the level jog into the box. Round caps
+    // so the two legs meet cleanly at the knee.
+    const { attach, knee, tip } = computeLeader(a, boxHeight);
+    const n = (p) => toNative(R, W0, H0, p.x, p.y);
+    const leg = (from, to) => pdfPage.drawLine({ start: n(from), end: n(to), thickness: 1.3, color, lineCap: ROUND_CAP });
+    leg(knee, tip);
+    for (const w of computeArrowWings(knee, tip)) leg(tip, w);
+    leg(attach, knee);
   }
 }
 
@@ -243,9 +242,8 @@ function markupBounds(a, font, R, W0, H0) {
     pts.push({ x: a.x, y: a.y }, { x: a.x + a.width, y: a.y + boxHeight });
     inner = nativeBox(pts, R, W0, H0);
     if (a.type === 'callout') {
-      const attach = computeAttachPoint(a, boxHeight);
-      const tip = { x: a.tipX, y: a.tipY };
-      pts.push(tip, ...computeArrowWings(attach, tip));
+      const { knee, tip } = computeLeader(a, boxHeight);
+      pts.push(tip, knee, ...computeArrowWings(knee, tip));
     }
   }
   if (!pts.length) return null;
@@ -335,10 +333,13 @@ async function attachMarkup(outDoc, pdfPage, font, a, R, W0, H0, serial) {
     if (a.type === 'callout') {
       const drawn = sized(a, font);
       const { boxHeight } = layoutNote(drawn, font);
-      const at = computeAttachPoint(drawn, boxHeight);
-      const tip = toNative(R, W0, H0, a.tipX, a.tipY);
-      const end = toNative(R, W0, H0, at.x, at.y);
-      Object.assign(dict, { IT: 'FreeTextCallout', CL: [r2(tip.x), r2(tip.y), r2(end.x), r2(end.y)], LE: 'OpenArrow' });
+      // A callout line with a knee is six numbers: tip, knee, end.
+      const leader = computeLeader(drawn, boxHeight);
+      const cl = [leader.tip, leader.knee, leader.attach].flatMap((p) => {
+        const q = toNative(R, W0, H0, p.x, p.y);
+        return [r2(q.x), r2(q.y)];
+      });
+      Object.assign(dict, { IT: 'FreeTextCallout', CL: cl, LE: 'OpenArrow' });
     }
   }
   pdfPage.node.addAnnot(ctx.register(ctx.obj(dict)));

@@ -747,8 +747,8 @@ def surface_checks(ws):
                 "x": tip_at[0] + (box_at[0] - tip_at[0]) * i / 6, "y": tip_at[1] + (box_at[1] - tip_at[1]) * i / 6})
         time.sleep(0.02)
     pv = ev(ws, PREVIEW)
-    check("moving the pointer draws the whole leader, with its arrowhead and the note's outline",
-          pv["lines"] == 3 and pv["box"] is True and pv["dot"] is False, str(pv))
+    check("moving the pointer draws the whole leader, with its jog, its arrowhead and the note's outline",
+          pv["lines"] == 4 and pv["box"] is True and pv["dot"] is False, str(pv))
     check("the leader ends on the tip, and the outline sits at the pointer",
           abs(pv["tip"][0] - tip_at[0]) < 1.5 and abs(pv["tip"][1] - tip_at[1]) < 1.5
           and abs(pv["boxAt"][0] - box_at[0]) < 1.5 and abs(pv["boxAt"][1] - box_at[1]) < 1.5, str(pv))
@@ -762,6 +762,19 @@ def surface_checks(ws):
     check("the callout that is placed is the one that was shown",
           abs(placed["from"][0] - pv["from"][0]) < 1.5 and abs(placed["from"][1] - pv["from"][1]) < 1.5, f"{placed['from']} vs {pv['from']}")
     check("and the preview is gone", placed["preview"] == 0)
+    # The leader meets the note on a short level run — the jog — and only
+    # then heads for the tip.
+    jog = ev(ws, """(async () => {
+      const { state, LEADER_JOG } = await import('./js/state.js');
+      const a = state.pages.find((p) => p.id === state.selectedPageId).annotations.at(-1);
+      const r = state.domRefs[a.id], n = (el, k) => Number(el.getAttribute(k)), s = state.currentScale;
+      return { x1: n(r.jogEl, 'x1'), y1: n(r.jogEl, 'y1'), x2: n(r.jogEl, 'x2'), y2: n(r.jogEl, 'y2'),
+               kx: n(r.lineEl, 'x1'), ky: n(r.lineEl, 'y1'), boxLeft: a.x * s, boxMid: a.y * s + r.boxEl.offsetHeight / 2, want: LEADER_JOG * s };
+    })()""", awaitp=True)
+    check("the leader leaves the note on a level jog", abs(jog["y1"] - jog["y2"]) < 0.01 and abs(abs(jog["x2"] - jog["x1"]) - jog["want"]) < 0.5,
+          str(jog))
+    check("from the middle of the side facing the tip", abs(jog["x1"] - jog["boxLeft"]) < 0.5 and abs(jog["y1"] - jog["boxMid"]) < 0.5 and jog["x2"] < jog["x1"], str(jog))
+    check("and turns for the tip at the knee", abs(jog["x2"] - jog["kx"]) < 0.01 and abs(jog["y2"] - jog["ky"]) < 0.01)
     typed("One")
     tap(*stage_point(ws, 0.9, 0.9))                    # ends the typing
     tap(*stage_point(ws, 0.5, 0.62)); tap(*stage_point(ws, 0.68, 0.5)); typed("Two")
@@ -1077,9 +1090,46 @@ def surface_checks(ws):
     key(ws, "Enter", "Enter", 13, meta=True)
     nxt = st()["annos"][-1]
     check("the next note placed shrinks too", nxt["text"] == "ok" and nxt["fit"] is True and nxt["width"] < 60, str(nxt))
+    # While the option is on, *finishing* a note is what shrinks it — so a
+    # note placed before the box was ticked, or opened from an older file,
+    # does not sit there at its old width looking as if nothing happened.
+    older = next(a for a in st()["annos"] if a["text"] == "Second")
+    ox, oy = to_client(older["x"] + 8, older["y"] + 8)
+    esc()
+    tap(ox, oy); tap(ox, oy)                          # select, then open
+    typed(" one")
+    key(ws, "Enter", "Enter", 13, meta=True)
+    done = next(a for a in st()["annos"] if a["id"] == older["id"])
+    check("with the option on, ⌘Return on an older fixed-width note shrinks it", older["fit"] is False and older["width"] == 170
+          and done["text"] == "Second one" and done["fit"] is True and done["width"] < 120, str(done))
+    undo()
+    back = next(a for a in st()["annos"] if a["id"] == older["id"])
+    check("as part of the same step as the typing", back["text"] == "Second" and back["fit"] is False and back["width"] == 170, str(back))
+    redo()
+    # And a drag has no width to choose while the text is choosing it.
+    click(ws, "#toolText")
+    drag(stage_point(ws, 0.76, 0.74), stage_point(ws, 0.93, 0.76))
+    typed("dragged")
+    key(ws, "Enter", "Enter", 13, meta=True)
+    dr = st()["annos"][-1]
+    check("with the option on, dragging out a box still gives one that hugs its text", dr["text"] == "dragged" and dr["fit"] is True and dr["width"] < 80, str(dr))
+
     click(ws, "#fitToggle")
     check("until the option is turned off", ev(ws, "(async()=>(await import('./js/state.js')).state.currentFit)()", awaitp=True) is False
           and st()["annos"][-1]["fit"] is False)
+    loose = ev(ws, BOX)
+    check("which leaves the note a fixed width with room to spare, still on one line",
+          st()["annos"][-1]["width"] > dr["width"] * 1.05 and loose["h"] == tight["h"], f"{dr['width']} -> {st()['annos'][-1]['width']}, h {loose['h']}")
+    # A click with an unsteady hand is still a click: a few pixels of
+    # travel must not make a box a few pixels wide.
+    slip = stage_point(ws, 0.76, 0.64)
+    mouse("mousePressed", *slip); mouse("mouseMoved", slip[0] + 5, slip[1] + 2); mouse("mouseMoved", slip[0] + 9, slip[1] + 3)
+    mouse("mouseReleased", slip[0] + 9, slip[1] + 3)
+    time.sleep(0.25)
+    typed("slipped")
+    key(ws, "Enter", "Enter", 13, meta=True)
+    sl = st()["annos"][-1]
+    check("a click that slips a few pixels places an ordinary note, not a sliver", sl["text"] == "slipped" and sl["width"] == 170 and sl["fit"] is False, str(sl))
     esc()
     shot(ws, "09b-shrunk")
 
@@ -1198,6 +1248,57 @@ def surface_checks(ws):
           {"FreeText", "Line", "Square", "Polygon", "Ink"} <= set(trip["kinds"]), str(trip["kinds"]))
     check("and they are on screen to be edited", trip["dom"] == len(trip["now"]) and trip["hl"] == 1 and trip["dirty"] is False, str(trip))
     shot(ws, "10-surface-reopened")
+
+    # --- zoom is a movement, not a cut ---
+    # Every frame between the two sizes is shown, the page never goes
+    # blank on the way, and the sharp redraw arrives once it has settled.
+    ev(ws, """(() => {
+      window.__zf = [];
+      const c = document.getElementById('pageCanvas');
+      const tick = () => {
+        window.__zf.push({ z: document.getElementById('zoomReadout').textContent, w: c.width, css: parseFloat(c.style.width) });
+        if (window.__zfOn) requestAnimationFrame(tick);
+      };
+      window.__zfOn = true;
+      requestAnimationFrame(tick);
+    })()""")
+    time.sleep(0.2)
+    click(ws, "#btnZoomIn")
+    time.sleep(1.3)
+    ev(ws, "window.__zfOn = false")
+    frames = ev(ws, "window.__zf")
+    sizes = []
+    for f in frames:
+        if not sizes or sizes[-1] != f["css"]:
+            sizes.append(f["css"])
+    grew = all(b > a for a, b in zip(sizes, sizes[1:]))
+    check("a zoom step passes through the sizes in between", len(sizes) >= 5 and grew, f"{len(sizes)} sizes: {sizes[:8]}")
+    check("the page is never blank on the way", min(f["w"] for f in frames) > 2, str(min(f["w"] for f in frames)))
+    check("its pixels are stretched first and redrawn sharp once it settles",
+          any(f["css"] > frames[0]["css"] and f["w"] == frames[0]["w"] for f in frames) and frames[-1]["w"] > frames[0]["w"],
+          f"backing {frames[0]['w']} -> {frames[-1]['w']}")
+    for _ in range(3):
+        ev(ws, "document.getElementById('btnZoomIn').click()")
+    time.sleep(1.4)
+    z3 = ev(ws, "document.getElementById('zoomReadout').textContent")
+    check("steps taken before the last has landed add up", z3 == "400%", z3)
+    held = ev(ws, "document.getElementById('pageCanvas').width")
+    ev(ws, """(() => { window.__draws = 0; const c = document.getElementById('pageCanvas');
+      const set = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'width').set;
+      Object.defineProperty(c, 'width', { configurable: true, get() { return Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'width').get.call(c); },
+        set(v) { window.__draws++; set.call(c, v); } }); })()""")
+    click(ws, "#toolRect")
+    drag(stage_point(ws, 0.3, 0.3), stage_point(ws, 0.4, 0.4))
+    esc()
+    undo()
+    time.sleep(0.8)
+    check("a markup edit and its undo redraw no page pixels", ev(ws, "window.__draws") == 0
+          and ev(ws, "document.getElementById('pageCanvas').width") == held, str(ev(ws, "window.__draws")))
+    ev(ws, "delete document.getElementById('pageCanvas').width")
+    click(ws, "#btnFitWidth")
+    time.sleep(1.2)
+    check("a fit mode is glided to, and then holds", ev(ws, "(async()=>(await import('./js/state.js')).state.zoomMode)()", awaitp=True) == "fit-width"
+          and ev(ws, "document.getElementById('btnFitWidth').classList.contains('toggled')") is True)
 
     # --- a note still being typed when the document changes under it ---
     click(ws, "#toolText")
