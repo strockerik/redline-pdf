@@ -525,7 +525,11 @@ select, input[type=text]{
 }
 #emptyState p{ font-size:13px; line-height:1.7; }
 #emptyState #platformNote{ color:#5b7184; max-width:380px; margin-left:auto; margin-right:auto; }
-#emptyState #platformNote:empty{ display:none; }
+#btnPlatformNoteDone{
+  display:flex; margin:8px auto 0; padding:4px 10px; font-size:11.5px; font-weight:500;
+  color:#3d5468; background:transparent; border-color:#b9c6d0;
+}
+#btnPlatformNoteDone:hover{ background:#dbe3ea; border-color:#9fb0bd; }
 
 /* ---------- Keyboard shortcuts ---------- */
 #shortcutsDialog{
@@ -654,6 +658,7 @@ select, input[type=text]{
   cursor:pointer; pointer-events:auto; touch-action:none;
 }
 .anno-box.selected .anno-del{ display:flex; }
+.anno-del svg{ pointer-events:none; }
 .tip-handle{ cursor:grab; pointer-events:auto; touch-action:none; }
 .tip-handle:active{ cursor:grabbing; }
 
@@ -666,7 +671,12 @@ select, input[type=text]{
   display:none; z-index:50; box-shadow:0 4px 14px rgba(0,0,0,0.4);
   max-width:calc(100vw - 32px); text-align:center;
 }
-#placeHint.show{ display:block; }
+/* One set of instructions at a time. Where the properties row is in
+   view it says what the armed tool does, so the floating hint keeps
+   quiet — except mid-callout, for the step that row cannot know about.
+   On a narrow screen that row scrolls, and the roles swap (below). */
+#placeHint.show{ display:none; }
+#placeHint.show.step{ display:block; }
 
 #dropOverlay{
   position:fixed; inset:0; z-index:100;
@@ -740,6 +750,8 @@ select, input[type=text]{
   #statusMsg:empty{ display:none; }
 
   .mobile-only{ display:flex !important; }
+  #placeHint.show{ display:block; }
+  #armedNote{ display:none !important; }
 
   #pageToolbar .rail-right{ margin-left:0; }
   #pageToolbar .tools .lbl{ display:none; }
@@ -793,7 +805,8 @@ select, input[type=text]{
    a markup are drawn larger, and their targets larger still: 44px across,
    whatever size the visible part is. */
 @media (pointer: coarse){
-  .anno-del{ width:32px; height:32px; top:-18px; right:-18px; font-size:17px; }
+  .anno-del{ width:32px; height:32px; top:-18px; right:-18px; }
+  .anno-del svg{ width:13px; height:13px; }
   .anno-del::after{ content:''; position:absolute; inset:-6px; border-radius:50%; }
   .anno-resize{ right:-16px; width:32px; }
   .anno-resize::after{ right:13px; width:4px; height:32px; }

@@ -24,9 +24,17 @@ import {
 import { undo, redo, historyStatus } from './history.js';
 import { saveAs, downloadCopy, dismissSaveAlert, canUseFileSystemAccess } from './files.js';
 import { renderTabs } from './tabs.js';
+import { finderHintSeen, setFinderHintSeen } from './persist.js';
 
 const $ = (id) => document.getElementById(id);
 const show = (el, on) => { el.hidden = !on; };
+
+const isNarrow = () => !!window.matchMedia?.('(max-width: 820px)').matches;
+
+// iOS never shows the "leave without saving?" prompt, so there the save
+// chip is the only warning there will ever be. It says so.
+const NO_CLOSE_PROMPT = typeof navigator !== 'undefined' && (/iPhone|iPad|iPod/.test(navigator.userAgent || '')
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
 
 const currentPage = () => state.pages.find((p) => p.id === state.selectedPageId);
 const selectedMarkup = () => currentPage()?.annotations.find((a) => a.id === state.selectedAnnoId) || null;
@@ -77,7 +85,8 @@ function refreshSaveChip(h) {
   if (state.dirty) {
     const n = h.changes;
     text = n ? `${n} unsaved change${n === 1 ? '' : 's'}` : 'Unsaved changes';
-    if (at) text += ` · last saved ${at}`;
+    if (NO_CLOSE_PROMPT) text += ' · leaving loses them';
+    else if (at) text += ` · last saved ${at}`;
     // Only of a document that did not come from a file. One that did has
     // a saved version, even if this session has not written to it.
     else if (state.combined || !state.sources.length) text += ' · never saved';
@@ -126,6 +135,18 @@ function buildPenSizes() {
   }
 }
 
+// What the armed tool does with the next press. Said here, beside its
+// properties, rather than in a second hint somewhere else on screen.
+const ARMED = {
+  text: 'click to drop a note, or drag to set its width',
+  callout: 'click what you’re pointing at, then where the note goes',
+  pen: 'draw as many as you like',
+  highlight: 'draw as many as you like',
+  arrow: 'drag from tail to tip, as many as you like',
+  rect: 'drag from corner to corner, as many as you like',
+  cloud: 'drag from corner to corner, as many as you like',
+};
+
 function refreshProps() {
   const sel = selectedMarkup();
   const tool = state.activeTool;
@@ -145,6 +166,7 @@ function refreshProps() {
   show($('btnDeleteAnno'), !!sel);
   $('btnDeleteAnno').disabled = !sel;
   show($('armedNote'), !sel && tool !== 'select');
+  $('armedText').textContent = ARMED[tool] || '';
 
   // The controls show the selected markup's own values, or else what the
   // next one will get.
@@ -260,10 +282,42 @@ function refreshMarkups() {
   $('markupList').replaceChildren(frag);
 }
 
+// ============================================================
+// The two side panels on a narrow screen
+//
+// There, the pages rail and the markups list are both drawers over the
+// sheet. They behave alike: one at a time, a scrim behind, and a tap on
+// the scrim or Esc puts either away. On a wide screen the markups list is
+// a panel beside the sheet and none of this applies to it.
+// ============================================================
+function syncScrim() {
+  const open = $('sidebar').classList.contains('open') || (isNarrow() && !$('markupRail').hidden);
+  $('drawerScrim').classList.toggle('show', open);
+}
+
+function setPagesDrawerOpen(open) {
+  if (open && isNarrow()) setRailOpen(false);
+  $('sidebar').classList.toggle('open', open);
+  $('btnPages').setAttribute('aria-expanded', String(open));
+  syncScrim();
+}
+
+export const closePagesDrawer = () => setPagesDrawerOpen(false);
+
+function installDrawers() {
+  $('btnPages').addEventListener('click', () => setPagesDrawerOpen(!$('sidebar').classList.contains('open')));
+  $('drawerScrim').addEventListener('click', () => {
+    setPagesDrawerOpen(false);
+    if (isNarrow()) setRailOpen(false);
+  });
+}
+
 function setRailOpen(open) {
   const rail = $('markupRail');
   if (rail.hidden === !open) return;
+  if (open && isNarrow()) setPagesDrawerOpen(false);
   show(rail, open);
+  syncScrim();
   $('btnMarkups').setAttribute('aria-expanded', String(open));
   $('btnMarkups').classList.toggle('open', open);
   refreshMarkups();
@@ -282,7 +336,7 @@ function installMarkups() {
     if (state.selectedPageId !== pageId) await selectPage(pageId);
     if (state.selectedPageId === pageId) selectMarkup(annoId);
     // On a phone the list covers the sheet it has just scrolled.
-    if (window.matchMedia?.('(max-width: 820px)').matches) setRailOpen(false);
+    if (isNarrow()) setRailOpen(false);
   });
 }
 
@@ -326,7 +380,10 @@ function installFileMenu() {
 
 /** Put away whatever is open over the app. True if something was. */
 export function dismissOverlays() {
-  return closeFileMenu();
+  if (closeFileMenu()) return true;
+  if ($('sidebar').classList.contains('open')) { setPagesDrawerOpen(false); return true; }
+  if (isNarrow() && !$('markupRail').hidden) { setRailOpen(false); return true; }
+  return false;
 }
 
 // ============================================================
@@ -351,18 +408,40 @@ function installShortcuts() {
 // First launch: the one caveat that applies here
 // ============================================================
 function platformNote() {
+  if (NO_CLOSE_PROMPT) {
+    return { text: 'On an iPhone or iPad nothing asks before the app closes, and nothing is kept. '
+      + 'Save downloads a copy to Files — do it before you leave.' };
+  }
   if (!canUseFileSystemAccess) {
-    return 'This browser has no save panel, so Save downloads a copy instead of writing back to your file. '
-      + 'Chrome on a Mac saves in place.';
+    return { text: 'This browser has no save panel, so Save downloads a copy instead of writing back to your file. '
+      + 'Chrome on a Mac saves in place.' };
   }
   if (!window.matchMedia?.('(display-mode: standalone)').matches) {
-    return 'Install Redline from the address bar for a dock icon, and to open PDFs straight from Finder.';
+    return { text: 'Install Redline from the address bar for a dock icon, and to open PDFs straight from Finder.' };
   }
-  if ('launchQueue' in window) {
-    return 'To open PDFs here with a double-click: in Finder, select any PDF → Get Info → '
-      + 'Open with: Redline → Change All. Once.';
+  // A step done once should not be explained on every launch: it goes
+  // away when it is dismissed, or when a PDF arrives from Finder — which
+  // is the proof it has been done.
+  if ('launchQueue' in window && !finderHintSeen()) {
+    return {
+      text: 'To open PDFs here with a double-click: in Finder, select any PDF → Get Info → '
+        + 'Open with: Redline → Change All.',
+      once: true,
+    };
   }
-  return '';
+  return null;
+}
+
+function installPlatformNote() {
+  const note = platformNote();
+  show($('platformNote'), !!note);
+  if (!note) return;
+  $('platformNoteText').textContent = note.text;
+  show($('btnPlatformNoteDone'), !!note.once);
+  $('btnPlatformNoteDone').addEventListener('click', () => {
+    setFinderHintSeen();
+    show($('platformNote'), false);
+  });
 }
 
 // ============================================================
@@ -397,6 +476,7 @@ export function installChrome() {
   $('btnRedo').addEventListener('click', doRedo);
 
   installFileMenu();
+  installDrawers();
   installPageNav();
   installMarkups();
   installShortcuts();
@@ -408,7 +488,7 @@ export function installChrome() {
   $('btnAlertDismiss').addEventListener('click', dismissSaveAlert);
   show($('btnAlertSaveAs'), canUseFileSystemAccess);
 
-  $('platformNote').textContent = platformNote();
+  installPlatformNote();
 
   onToolbarUpdate(refreshChrome);
   onDirtyChange(refreshChrome);

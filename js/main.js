@@ -14,7 +14,7 @@ import {
   installDrawing, duplicateSelected, copySelected, pasteMarkup,
 } from './annots.js';
 import {
-  installChrome, doUndo, doRedo, dismissOverlays, openShortcuts,
+  installChrome, doUndo, doRedo, dismissOverlays, openShortcuts, closePagesDrawer,
 } from './chrome.js';
 import {
   installLaunchHandler, installDragAndDrop, openViaPicker,
@@ -29,28 +29,6 @@ import { loadPrefs, installPrefSaving, forgetSavedSession } from './persist.js';
 const $ = (id) => document.getElementById(id);
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdf.worker.min.js';
-
-// ============================================================
-// Pages drawer (narrow screens)
-// ============================================================
-function installPagesDrawer() {
-  const sidebar = $('sidebar');
-  const toggle = $('btnPages');
-  const scrim = $('drawerScrim');
-
-  const close = () => {
-    sidebar.classList.remove('open');
-    scrim.classList.remove('show');
-    toggle.setAttribute('aria-expanded', 'false');
-  };
-  toggle.addEventListener('click', () => {
-    const open = sidebar.classList.toggle('open');
-    scrim.classList.toggle('show', open);
-    toggle.setAttribute('aria-expanded', String(open));
-  });
-  scrim.addEventListener('click', close);
-  return { close };
-}
 
 // ============================================================
 // Keyboard
@@ -186,8 +164,6 @@ function installServiceWorker() {
 // Wire-up
 // ============================================================
 function wireUi() {
-  const drawer = installPagesDrawer();
-
   // --- Open ---
   $('btnOpen').addEventListener('click', openViaPicker);
   $('btnEmptyOpen').addEventListener('click', openViaPicker);
@@ -239,7 +215,7 @@ function wireUi() {
 
   installThumbReorder(
     (movedId, targetId, before) => reorderPage(movedId, targetId, before),
-    (pageId) => { selectPage(pageId); drawer.close(); },
+    (pageId) => { selectPage(pageId); closePagesDrawer(); },
     (pageId, delta) => rotatePage(pageId, delta),
     (pageId) => deletePage(pageId),
   );

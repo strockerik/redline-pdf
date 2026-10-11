@@ -8,6 +8,7 @@
  */
 import { state, setStatus, markDirty } from './state.js';
 import { noteClean } from './history.js';
+import { setFinderHintSeen } from './persist.js';
 import { importPdfBytes, importPdfFile } from './pages.js';
 import { docForNewFile, renderTabs } from './tabs.js';
 import { buildPdfBytes } from './export.js';
@@ -47,6 +48,9 @@ export function installLaunchHandler(ready) {
   if (typeof LaunchParams === 'undefined' || !('files' in LaunchParams.prototype)) return;
   window.launchQueue.setConsumer(async (params) => {
     if (!params || !params.files || !params.files.length) return;
+    // A file arriving this way is proof the Finder association is set up;
+    // the empty state can stop explaining how to do it.
+    setFinderHintSeen();
     await ready;
     await openInTabs(params.files.map((handle) => ({ handle })));
   });

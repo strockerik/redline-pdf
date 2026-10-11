@@ -665,6 +665,11 @@ def surface_checks(ws):
     click(ws, "#toolText")
     check("arming a tool brings its properties and says it is armed",
           shown("colorGrp") and shown("fontSizeGrp") and shown("fillGrp") and shown("armedNote") and not shown("penSizeGrp"))
+    check("and says, once, what the tool does",
+          "drag to set its width" in ev(ws, "document.getElementById('armedText').textContent") and not shown("placeHint"),
+          ev(ws, "document.getElementById('armedText').textContent"))
+    check("the tools are a labelled group, not a toolbar that would owe arrow-key focus",
+          ev(ws, "document.querySelector('#pageToolbar .tools').getAttribute('role')") == "group")
     tap(*stage_point(ws, 0.2, 0.15))
     typed("First")
     tap(*stage_point(ws, 0.7, 0.15))
@@ -689,7 +694,18 @@ def surface_checks(ws):
     click(ws, "#toolText")
     a, b = stage_point(ws, 0.15, 0.3), stage_point(ws, 0.55, 0.34)
     scale = ev(ws, "(async()=>(await import('./js/state.js')).state.currentScale)()", awaitp=True)
-    drag(a, b)
+    # Mid-drag, pulled a long way down: the outline must show the note
+    # that will appear — one line high — not a tall box it would discard.
+    mouse("mousePressed", *a)
+    for i in range(1, 9):
+        mouse("mouseMoved", a[0] + (b[0] - a[0]) * i / 8, a[1] + 160 * i / 8)
+        time.sleep(0.015)
+    ghost = ev(ws, "(g => g ? {h: g.offsetHeight, w: g.offsetWidth, top: g.getBoundingClientRect().top} : null)(document.querySelector('.note-ghost'))")
+    mouse("mouseMoved", *b)
+    mouse("mouseReleased", *b)
+    time.sleep(0.25)
+    check("the outline while dragging is one line high, however far down the pointer goes",
+          ghost is not None and ghost["h"] < 40 * scale and abs(ghost["top"] - a[1]) < 2, str(ghost))
     typed("Sized by dragging")
     esc()
     s = st()
@@ -697,9 +713,15 @@ def surface_checks(ws):
     got = s["annos"][-1]["width"] if len(s["annos"]) == 3 else None
     check("dragging the text tool draws a box of that width", got is not None and abs(got - want) < 2, f"{got} vs {want:.1f}")
     check("a clicked one keeps the default width", s["annos"][0]["width"] == 170, str(s["annos"][0]["width"]))
+    box_h = ev(ws, "document.querySelectorAll('.anno-box')[2].offsetHeight")
+    check("and the note that appears is the one the outline showed", abs(box_h - ghost["h"]) <= 3 and abs(s["annos"][-1]["y"] - (a[1] - to_client(0, 0)[1]) / scale) < 1,
+          f"box {box_h} vs ghost {ghost['h']}")
 
     click(ws, "#toolCallout")
-    tap(*stage_point(ws, 0.12, 0.62)); tap(*stage_point(ws, 0.3, 0.5)); typed("One")
+    tap(*stage_point(ws, 0.12, 0.62))
+    check("mid-callout, the next step is said where the pointer is",
+          shown("placeHint") and "note itself" in ev(ws, "document.getElementById('placeHint').textContent"))
+    tap(*stage_point(ws, 0.3, 0.5)); typed("One")
     tap(*stage_point(ws, 0.9, 0.9))                    # ends the typing
     tap(*stage_point(ws, 0.5, 0.62)); tap(*stage_point(ws, 0.68, 0.5)); typed("Two")
     tap(*stage_point(ws, 0.9, 0.9))                    # a note keeps its text when it loses focus
@@ -727,6 +749,8 @@ def surface_checks(ws):
     })()""")
     check("it multiplies with the sheet instead of covering it", hl == {"n": 1, "blend": "multiply", "inLeader": 0}, str(hl))
     check("the highlighter is still in hand", s["tool"] == "highlight" and s["label"] == "Highlight")
+    check("a freehand tool is told to draw, not to place",
+          ev(ws, "document.getElementById('armedText').textContent").startswith("draw"), ev(ws, "document.getElementById('armedText').textContent"))
     click(ws, "#toolArrow")
     tap(*stage_point(ws, 0.9, 0.3))
     check("a click with a two-point tool draws nothing", len(st()["annos"]) == len(kinds))
@@ -810,6 +834,27 @@ def surface_checks(ws):
     check("a note has a white fill by default", ev(ws, "document.getElementById('fillToggle').checked") is True
           and ev(ws, "getComputedStyle(document.querySelector('.anno-box.selected')).backgroundColor") == "rgb(255, 255, 255)",
           ev(ws, "getComputedStyle(document.querySelector('.anno-box.selected')).backgroundColor"))
+    # Brushing a handle is not an edit: no step to undo, no unsaved change.
+    quiet = st()["hist"]
+    rz = ev(ws, "(r => ({x: r.left + r.width / 2, y: r.top + r.height / 2}))(document.querySelector('.anno-box.selected .anno-resize').getBoundingClientRect())")
+    mouse("mousePressed", rz["x"], rz["y"]); mouse("mouseMoved", rz["x"] + 2, rz["y"] + 1); mouse("mouseReleased", rz["x"] + 2, rz["y"] + 1)
+    time.sleep(0.2)
+    check("a twitch on the resize handle changes nothing", st()["hist"] == quiet and st()["annos"][0]["width"] == 170, str(st()["hist"]))
+    drag((rz["x"], rz["y"]), (rz["x"] + 30, rz["y"]))
+    s3 = st()
+    check("a real drag on it resizes, as one step", s3["annos"][0]["width"] > 180 and s3["hist"]["undoLabel"] == "Resize note"
+          and s3["hist"]["changes"] == quiet["changes"] + 1, f"{s3['annos'][0]['width']} {s3['hist']}")
+    undo()
+    callout = next(a for a in st()["annos"] if a["type"] == "callout")
+    tap(*to_client(callout["x"] + 20, callout["y"] + 10))
+    tip = ev(ws, "(r => ({x: r.left + r.width / 2, y: r.top + r.height / 2}))([...document.querySelectorAll('.tip-handle')].find((n) => n.style.display !== 'none').getBoundingClientRect())")
+    quiet = st()["hist"]
+    mouse("mousePressed", tip["x"], tip["y"]); mouse("mouseMoved", tip["x"] + 1, tip["y"] + 2); mouse("mouseReleased", tip["x"] + 1, tip["y"] + 2)
+    time.sleep(0.2)
+    check("nor does a twitch on a leader's tip", st()["hist"] == quiet, str(st()["hist"]))
+    esc()
+    tap(x, y)
+
     click(ws, "#fillToggle")
     check("which can be turned off", st()["annos"][0]["fill"] is False
           and ev(ws, "getComputedStyle(document.querySelector('.anno-box.selected')).backgroundColor") == "rgba(0, 0, 0, 0)",
@@ -991,6 +1036,45 @@ def surface_checks(ws):
     check("undoing past it is not", st()["dirty"] is True and "1 unsaved change" in st()["chip"], repr(st()["chip"]))
     redo()
 
+    # --- undo may change the document, never which file Save writes ---
+    # Every checkpoint taken before a Save As was taken of a document that
+    # saved to the old file. Step back onto one and ⌘S must still write to
+    # the file that was saved *to* — not overwrite the one saved away from.
+    ev(ws, """(() => {
+      window.__bWrites = 0;
+      window.__pickerWas = window.showSaveFilePicker;
+      window.showSaveFilePicker = async () => {
+        const b = { kind: 'file', name: 'B-reviewed.pdf' };
+        const def = (k, v) => Object.defineProperty(b, k, { value: v, enumerable: false });
+        def('queryPermission', async () => 'granted');
+        def('requestPermission', async () => 'granted');
+        def('createWritable', async () => ({ write: async () => { window.__bWrites++; }, close: async () => {} }));
+        window.__b = b;
+        return b;
+      };
+    })()""")
+    a_writes = ev(ws, "window.__writes")
+    key(ws, "s", "KeyS", 83, meta=True, shift=True)
+    wait_for(ws, "document.getElementById('statusMsg').textContent.includes('Saved B-reviewed.pdf')", timeout=30, label="saved as B")
+    click(ws, "#toolRect")
+    drag(stage_point(ws, 0.8, 0.3), stage_point(ws, 0.9, 0.4))
+    esc()
+    undo()
+    undo()                                            # past the Save As, onto a checkpoint from before it
+    aim = ev(ws, """(async () => {
+      const { state } = await import('./js/state.js');
+      return { name: state.docName, isB: state.fileHandle === window.__b, isA: state.fileHandle === window.__handle,
+               dirty: state.dirty, title: document.getElementById('docTitle').textContent };
+    })()""", awaitp=True)
+    check("undo past a Save As still aims at the file saved to", aim["isB"] and aim["name"] == "B-reviewed.pdf" and aim["title"] == "B-reviewed.pdf", str(aim))
+    check("and the document knows it differs from that file", aim["dirty"] is True)
+    key(ws, "s", "KeyS", 83, meta=True)
+    wait_for(ws, "window.__bWrites === 2", timeout=30, label="second write to B")
+    check("so Save writes there, and the original is not touched", ev(ws, "window.__writes") == a_writes and ev(ws, "window.__bWrites") == 2,
+          f"A {ev(ws, 'window.__writes')} (was {a_writes}), B {ev(ws, 'window.__bWrites')}")
+    redo()
+    ev(ws, "window.showSaveFilePicker = window.__pickerWas")
+
     # --- the new shapes survive a save and reopen, through the real app ---
     trip = ev(ws, """(async () => {
       const { state } = await import('./js/state.js'), tabs = await import('./js/tabs.js');
@@ -1031,6 +1115,46 @@ def surface_checks(ws):
     check("⌘T mid-note keeps what was typed, in the document it was typed in", after["kept"] and after["oldDirty"], str(after))
     check("and leaves the new tab clean, with nothing of the old one to undo",
           after["here"] == "Untitled.pdf" and after["pages"] == 0 and not after["dirty"] and not after["canUndo"], str(after))
+
+    # --- on a phone both side panels are drawers, and behave alike ---
+    check("a PDF arriving from Finder retires the note explaining how to set that up",
+          ev(ws, "(async()=>(await import('./js/persist.js')).finderHintSeen())()", awaitp=True) is True
+          and ev(ws, "JSON.parse(localStorage.getItem('redline.prefs') || '{}').finderHintDone") is True)
+    ws.call("Emulation.setDeviceMetricsOverride", {"width": 390, "height": 780, "deviceScaleFactor": 2, "mobile": True})
+    time.sleep(0.6)
+    PANELS = """(() => ({
+      pages: document.getElementById('sidebar').classList.contains('open'),
+      markups: !document.getElementById('markupRail').hidden,
+      scrim: document.getElementById('drawerScrim').classList.contains('show'),
+    }))()"""
+    ev(ws, "document.getElementById('btnPages').click()")
+    check("the pages drawer opens over a scrim", ev(ws, PANELS) == {"pages": True, "markups": False, "scrim": True}, str(ev(ws, PANELS)))
+    ev(ws, "document.getElementById('btnMarkups').click()")
+    check("opening the markups list closes it, and keeps the scrim", ev(ws, PANELS) == {"pages": False, "markups": True, "scrim": True}, str(ev(ws, PANELS)))
+    esc()
+    check("Esc puts the markups list away", ev(ws, PANELS) == {"pages": False, "markups": False, "scrim": False}, str(ev(ws, PANELS)))
+    ev(ws, "document.getElementById('btnMarkups').click()")
+    ev(ws, "document.getElementById('btnPages').click()")
+    check("opening pages closes the markups list in turn", ev(ws, PANELS) == {"pages": True, "markups": False, "scrim": True}, str(ev(ws, PANELS)))
+    esc()
+    check("Esc puts the pages drawer away", ev(ws, PANELS) == {"pages": False, "markups": False, "scrim": False}, str(ev(ws, PANELS)))
+    ev(ws, "document.getElementById('btnMarkups').click()")
+    ev(ws, "document.getElementById('drawerScrim').click()")
+    check("and a tap on the scrim closes whichever is open", ev(ws, PANELS) == {"pages": False, "markups": False, "scrim": False}, str(ev(ws, PANELS)))
+    # There the properties row scrolls sideways, so the instruction moves
+    # to the floating hint — still one place, just the other one.
+    ev(ws, "document.getElementById('btnAddBlank').click()")
+    time.sleep(0.6)
+    esc()                                             # the text tool was still in hand from above
+    key(ws, "t", "KeyT", 84)
+    hints = ev(ws, """({ float: getComputedStyle(document.getElementById('placeHint')).display,
+      row: getComputedStyle(document.getElementById('armedNote')).display,
+      text: document.getElementById('placeHint').textContent })""")
+    check("on a narrow screen the floating hint speaks and the row keeps quiet",
+          hints["float"] == "block" and hints["row"] == "none" and "drag to set its width" in hints["text"], str(hints))
+    esc()
+    ws.call("Emulation.clearDeviceMetricsOverride")
+    time.sleep(0.4)
 
 
 def tab_checks(ws):
@@ -1965,6 +2089,33 @@ def main():
         check("the text size is remembered, and the toolbar shows it", now["font"] == font and now["fontSel"] == font,
               f"{now['font']} / {now['fontSel']} vs {font}")
         shot(ws, "07-relaunched")
+
+        # The Finder set-up step is done once. Installed, with nothing yet
+        # opened from Finder, the empty sheet explains it — until it is
+        # dismissed, and then never again.
+        # (Chrome's media emulation does not cover display-mode, so the
+        # one query the app makes is answered for it.)
+        installed = ws.call("Page.addScriptToEvaluateOnNewDocument", {"source": """
+          (() => { const real = window.matchMedia.bind(window);
+            window.matchMedia = (q) => /display-mode:\\s*standalone/.test(q)
+              ? { matches: true, media: q, addEventListener() {}, removeEventListener() {} } : real(q); })();"""})
+        ws.call("Page.navigate", {"url": URL})
+        wait_for(ws, "document.querySelectorAll('#colorGrp .swatch').length > 0", timeout=30, label="installed app booted")
+        time.sleep(0.5)
+        NOTE = """(() => ({
+          shown: getComputedStyle(document.getElementById('platformNote')).display !== 'none',
+          text: document.getElementById('platformNoteText').textContent,
+          done: getComputedStyle(document.getElementById('btnPlatformNoteDone')).display !== 'none',
+        }))()"""
+        note = ev(ws, NOTE)
+        check("an installed app explains the one-time Finder step", note["shown"] and "Change All" in note["text"] and note["done"], str(note))
+        click(ws, "#btnPlatformNoteDone")
+        check("which can be dismissed", ev(ws, NOTE)["shown"] is False)
+        ws.call("Page.navigate", {"url": URL})
+        wait_for(ws, "document.querySelectorAll('#colorGrp .swatch').length > 0", timeout=30, label="booted again")
+        time.sleep(0.5)
+        check("and does not come back on the next launch", ev(ws, NOTE)["shown"] is False, str(ev(ws, NOTE)))
+        ws.call("Page.removeScriptToEvaluateOnNewDocument", {"identifier": installed["identifier"]})
 
         print("\n=== console ===")
         ws.drain(0.6)

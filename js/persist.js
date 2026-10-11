@@ -24,6 +24,17 @@ import { state, COLORS, PEN_SIZES } from './state.js';
 
 const KEY = 'redline.prefs';
 
+// Whether the one-time Finder setup step has been dealt with — dismissed,
+// or shown to be done by a PDF actually arriving from Finder. Not a field
+// on `state`: it describes this installation, not anything on screen.
+let finderHintDone = false;
+export const finderHintSeen = () => finderHintDone;
+export function setFinderHintSeen() {
+  if (finderHintDone) return;
+  finderHintDone = true;
+  savePrefs();           // now, not at unload: this must survive a crash
+}
+
 /** Apply stored preferences to `state`. Call before the toolbar is built,
  *  so it is built from them. Anything unreadable is simply ignored. */
 export function loadPrefs() {
@@ -42,6 +53,7 @@ export function loadPrefs() {
   if (PEN_SIZES.some((s) => s.width === p.penSize)) state.currentPenSize = p.penSize;
   if (COLORS.includes(p.highlightColor)) state.currentHighlightColor = p.highlightColor;
   if (typeof p.fill === 'boolean') state.currentFill = p.fill;
+  if (p.finderHintDone === true) finderHintDone = true;
 }
 
 function savePrefs() {
@@ -53,6 +65,7 @@ function savePrefs() {
       penSize: state.currentPenSize,
       highlightColor: state.currentHighlightColor,
       fill: state.currentFill,
+      finderHintDone,
     }));
   } catch { /* private mode, storage full: preferences are not worth an error */ }
 }

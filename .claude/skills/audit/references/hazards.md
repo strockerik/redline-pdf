@@ -122,6 +122,16 @@ undo cannot reach — closing a tab or the window with unsaved work.
   is from its last save. The trap: undo past a save, then make a new edit.
   The saved state was on the redo side, which is now gone, so no amount of
   undoing may report clean again (`adrift` in history.js).
+- **Undo may change the document, never which file ⌘S writes.** A
+  checkpoint holds the name and file handle, because undoing a merge has
+  to bring them back. Rev 20 shipped with the consequence nobody traced:
+  open A, mark up, Save As B, mark up, undo twice — the second undo
+  restored a checkpoint from before the Save As, and with it A's handle.
+  ⌘S then overwrote A with a half-undone document. The only sign was the
+  title changing, which looks like undo doing its job. A successful save
+  now rewrites the name and handle in every checkpoint on both stacks
+  (`noteClean` in history.js). Anything else that changes a document's
+  identity outside a checkpointed action owes the stacks the same.
 - **A failed save must not fade.** It raises `#saveAlert`, which stays
   until dismissed or a save succeeds, says the work is still open, and
   offers Save As and Download. Never route a save failure to `setStatus`.

@@ -7,6 +7,11 @@
  * there is no inverse to write for each new tool, and nothing a checkpoint
  * can forget to include.
  *
+ * A checkpoint also holds where the document saves to. That is what lets
+ * undoing a merge give back the file it was — and it is why a save has to
+ * rewrite that part of every checkpoint (noteClean): undo may change what
+ * is in the document, never which file ⌘S writes.
+ *
  * Page objects are kept, not copied. Thumbnails and the GPU plots are
  * cached against a page's identity, and a 200-sheet set must not re-render
  * every thumbnail because one note was un-moved.
@@ -122,7 +127,18 @@ export function noteClean({ saved = false } = {}) {
   if (!h) return;
   h.sinceSave = 0;
   h.adrift = false;
-  if (saved) h.savedAt = Date.now();
+  if (!saved) return;
+  h.savedAt = Date.now();
+  // A checkpoint carries the document's name and file handle, because
+  // undoing a merge has to bring them back. But every checkpoint now on
+  // these stacks describes a document that lives in the file just written.
+  // Left holding the old pair, a step back past a Save As would quietly
+  // re-aim ⌘S at the file that was saved *away from* — and overwrite it
+  // with a half-undone document.
+  for (const entry of [...h.undo, ...h.redo]) {
+    entry.snap.docName = state.docName;
+    entry.snap.fileHandle = state.fileHandle;
+  }
 }
 
 /** A file has just become this document. There is nothing before that to

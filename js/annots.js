@@ -90,7 +90,8 @@ function buildNoteDom(page, a) {
 
   const del = document.createElement('div');
   del.className = 'anno-del';
-  del.textContent = '×';
+  del.innerHTML = '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">'
+    + '<path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path></svg>';
   del.title = 'Delete note';
   box.appendChild(del);
 
@@ -287,6 +288,8 @@ function startResize(e, page, a, boxEl) {
   handle.setPointerCapture(e.pointerId);
 
   const onMove = (ev) => {
+    // Brushing the handle is not a resize: no step to undo, no unsaved change.
+    if (!moved && Math.abs(ev.clientX - startX) < DRAG_SLOP) return;
     if (!moved) checkpoint('Resize note');
     moved = true;
     a.width = Math.max(MIN_NOTE_WIDTH, origW + (ev.clientX - startX) / scale);
@@ -307,10 +310,12 @@ function startResize(e, page, a, boxEl) {
 
 function startTipDrag(e, page, a) {
   const handle = e.currentTarget;
+  const startX = e.clientX, startY = e.clientY;
   let moved = false;
   handle.setPointerCapture(e.pointerId);
 
   const onMove = (ev) => {
+    if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) < DRAG_SLOP) return;
     if (!moved) checkpoint('Move leader');
     moved = true;
     const p = pointAt(ev);
@@ -625,7 +630,11 @@ export function installDrawing() {
 }
 
 /** With the text tool, dragging sets the note's width; a plain click still
- *  drops one at the default width (handled by the click that follows). */
+ *  drops one at the default width (handled by the click that follows).
+ *
+ *  Only the width. A note is as tall as its text, so the outline shown
+ *  while dragging is one line high however far down the pointer goes —
+ *  it shows the box that will actually appear, not one it would discard. */
 function beginNoteDrag(e, page) {
   const start = pointAt(e);
   let ghost = null;
@@ -638,9 +647,9 @@ function beginNoteDrag(e, page) {
     }
     const p = pointAt(ev);
     ghost.style.left = (Math.min(start.x, p.x) * scale) + 'px';
-    ghost.style.top = (Math.min(start.y, p.y) * scale) + 'px';
-    ghost.style.width = (Math.abs(p.x - start.x) * scale) + 'px';
-    ghost.style.height = (Math.max(Math.abs(p.y - start.y), state.currentFontSize * LINE_HEIGHT_MULT + ANNO_PAD * 2) * scale) + 'px';
+    ghost.style.top = (start.y * scale) + 'px';
+    ghost.style.width = (Math.max(MIN_NOTE_WIDTH, Math.abs(p.x - start.x)) * scale) + 'px';
+    ghost.style.height = ((state.currentFontSize * LINE_HEIGHT_MULT + ANNO_PAD * 2) * scale) + 'px';
   }, (moved, ev) => {
     if (ghost) ghost.remove();
     if (!moved) return;
@@ -649,7 +658,7 @@ function beginNoteDrag(e, page) {
     const p = pointAt(ev);
     placeNote(page, {
       type: 'text',
-      x: Math.min(start.x, p.x), y: Math.min(start.y, p.y),
+      x: Math.min(start.x, p.x), y: start.y,
       width: Math.max(MIN_NOTE_WIDTH, Math.abs(p.x - start.x)),
     });
   });
@@ -680,11 +689,14 @@ export function handleLayerClick(e) {
     if (!state.pendingCalloutTip) {
       state.pendingCalloutTip = p;
       $('placeHint').textContent = 'Now tap where the note itself should sit.';
+      // Mid-gesture, so it shows wherever the properties row can be seen too.
+      $('placeHint').classList.add('step');
       return;
     }
     const tip = state.pendingCalloutTip;
     state.pendingCalloutTip = null;
     $('placeHint').textContent = TOOL_HINT.callout;
+    $('placeHint').classList.remove('step');
     placeNote(page, { type: 'callout', x: p.x, y: p.y, tipX: tip.x, tipY: tip.y });
   } else {
     deselectAnnotation();
@@ -858,6 +870,7 @@ export function setActiveTool(tool) {
   const hint = $('placeHint');
   hint.textContent = TOOL_HINT[tool] || '';
   hint.classList.toggle('show', !!TOOL_HINT[tool]);
+  hint.classList.remove('step');
 
   // Arming a tool is about the next markup, not the selected one.
   if (tool !== 'select' && state.selectedAnnoId) deselectAnnotation();

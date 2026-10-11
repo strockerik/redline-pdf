@@ -77,7 +77,10 @@ handle it.
 **Undo is a checkpoint taken before each change** (`checkpoint(label)` in
 history.js) — the page list, each page's rotation and markups, the
 sources and the document's identity. Any new code that changes the
-document must take one first; see hazards.md §3. `chrome.js` redraws the
+document must take one first; see hazards.md §3. Identity is in there so
+that undoing a merge gives the name and handle back — which means a save
+has to rewrite it in every checkpoint (`noteClean`), or stepping back past
+a Save As re-aims ⌘S at the file that was saved away from. `chrome.js` redraws the
 whole command surface from `state` and the history and holds no state of
 its own; view.js calls it through `onToolbarUpdate` because chrome.js
 imports view.js and the reverse would be a cycle.
@@ -95,8 +98,8 @@ cache is keyed by the page object for exactly that reason.
 
 **Documents close with the app. Nothing is reopened, and nothing about a
 document is ever stored.** Every launch starts empty; only the fit mode,
-colours, text size, line weight and note fill are kept (persist.js,
-localStorage). This
+colours, text size, line weight, note fill and whether the Finder set-up
+note has been dealt with are kept (persist.js, localStorage). This
 is a decision, not an omission: the saved session nobody wanted raced
 every file opened from Finder, and — with a file handle in it — made
 Chrome crash at exit. Don't bring back autosave, and above all don't put

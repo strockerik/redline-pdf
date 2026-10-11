@@ -229,6 +229,83 @@ const ink = (id) => ({ id, type: 'ink', color: '#000000', size: 2, points: [{ x:
   check('and redoing it makes it a combined document again', S.docName === 'Combined.pdf' && S.fileHandle === null && S.combined && S.sources.length === 2);
 }
 
+// --- 8a. Undo must never move where Save writes ---
+// Identity is in the checkpoint so that undoing a merge can bring a name
+// and a handle back. But a checkpoint taken before a Save As holds the
+// *old* file: step back onto it and ⌘S would overwrite the file that was
+// saved away from, with a half-undone document. Every checkpoint on the
+// stacks describes a document that now lives in the new file.
+{
+  freshDoc();
+  const A = { name: 'A.pdf' }, B = { name: 'B-reviewed.pdf' };
+  const p = page(1);
+  S.pages = [p];
+  S.docName = 'A.pdf'; S.fileHandle = A;
+  const add = (id) => { H.checkpoint('Add note'); S.pages[0].annotations.push(note(id, 'x')); stateMod.markDirty(); };
+  add(1); add(2);
+
+  S.fileHandle = B; S.docName = 'B-reviewed.pdf';      // Save As
+  H.noteClean({ saved: true });
+  stateMod.markDirty(false);
+
+  add(3);
+  H.undo();
+  check('undo back to a Save As still aims at the new file', S.fileHandle === B && S.docName === 'B-reviewed.pdf' && !S.dirty);
+  H.undo();
+  check('undo past a Save As does too', S.fileHandle === B && S.docName === 'B-reviewed.pdf',
+    `${S.docName}, handle ${S.fileHandle && S.fileHandle.name}`);
+  check('and knows it is no longer what is on disk', S.dirty && S.pages[0].annotations.length === 1);
+  H.undo();
+  check('all the way back to the start', S.fileHandle === B && S.pages[0].annotations.length === 0);
+  H.redo(); H.redo(); H.redo();
+  check('and forward again', S.fileHandle === B && S.docName === 'B-reviewed.pdf' && S.pages[0].annotations.length === 3);
+
+  // The redo side as well: undo first, *then* save somewhere else.
+  H.undo();
+  const C = { name: 'C.pdf' };
+  S.fileHandle = C; S.docName = 'C.pdf';
+  H.noteClean({ saved: true });
+  stateMod.markDirty(false);
+  H.redo();
+  check('a step redone after a Save As aims at the new file too', S.fileHandle === C && S.docName === 'C.pdf' && S.dirty);
+}
+
+// A merge undone after the merged document was saved: the pages go back
+// to one file's worth, but they are now the contents of the saved file —
+// not of the file they were merged from, which Save must not touch.
+{
+  freshDoc();
+  const A = { name: 'A.pdf' }, M = { name: 'Merged.pdf' };
+  const src = { id: 1, name: 'A.pdf' };
+  S.pages = [page(1)]; S.sources = [src];
+  S.docName = 'A.pdf'; S.fileHandle = A; S.combined = false;
+  H.checkpoint('Add B.pdf');
+  S.sources = [src, { id: 2, name: 'B.pdf' }]; S.pages.push(page(2));
+  S.docName = 'Combined.pdf'; S.fileHandle = null; S.combined = true;
+  S.fileHandle = M; S.docName = 'Merged.pdf';          // Save As
+  H.noteClean({ saved: true });
+  H.undo();
+  check('undoing a merge after saving it does not re-aim Save at the original', S.fileHandle === M && S.docName === 'Merged.pdf'
+    && S.pages.length === 1, `${S.docName}`);
+}
+
+// Other documents' checkpoints are none of this save's business.
+{
+  const a = freshDoc();
+  const A = { name: 'A.pdf' };
+  S.pages = [page(1)]; S.docName = 'A.pdf'; S.fileHandle = A;
+  H.checkpoint('Add note'); S.pages[0].annotations.push(note(1, 'x'));
+  captureActiveDoc();
+  freshDoc();
+  S.pages = [page(1)]; S.docName = 'Z.pdf'; S.fileHandle = { name: 'Z.pdf' };
+  H.checkpoint('Add note');
+  H.noteClean({ saved: true });
+  captureActiveDoc();
+  loadDocIntoState(a);
+  H.undo();
+  check('saving one document leaves another\'s history alone', S.fileHandle === A && S.docName === 'A.pdf');
+}
+
 // --- 9. Undo goes to where the change was made ---
 {
   freshDoc();
