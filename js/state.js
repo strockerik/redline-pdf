@@ -36,6 +36,11 @@ export const PEN_SIZES = [
 ];
 export const PEN_MIN_POINT_DIST = 1.2;  // pt
 
+// pdf-lib stops every 50 objects while writing a file, to let the page
+// breathe, and each stop is a timer. Far fewer stops still keep a long
+// save from freezing the window.
+export const SAVE_PACE = 2000;          // objects between pauses
+
 // Every markup is one of two families. A note (text, callout) is a box of
 // text. Everything else is a *point shape*: a colour, a line weight and a
 // list of points in visual space — a pen stroke and a highlight are the

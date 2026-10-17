@@ -7,7 +7,7 @@ import {
 } from './state.js';
 import { renderAnnotationLayer } from './annots.js';
 import {
-  plotAvailable, plotRecord, startPlot, drawPlot, plotBitmap, plotBusy,
+  plotAvailable, plotRecord, startPlot, drawPlot, plotBitmap, plotRoom,
   pageMatrix, setShownPlot, sweepPlots, onPlotEvent,
 } from './plot.js';
 
@@ -18,8 +18,10 @@ const $ = (id) => document.getElementById(id);
 // ============================================================
 const STAGE_PAD = 36;   // matches #canvasStage padding in app.css
 
-/** Logical px per PDF point for the current zoom mode and page. */
-function computeScale(page) {
+/** Logical px per PDF point that `page` would be shown at, in the current
+ *  zoom mode. No side effects: the page-ahead drawing below asks this of
+ *  pages that are not on screen. */
+function scaleFor(page) {
   const { w: Wv, h: Hv } = visualSize(page.rotation, page.W0, page.H0);
   const stage = $('canvasStage');
   const availW = Math.max(120, stage.clientWidth - STAGE_PAD * 2);
@@ -33,12 +35,15 @@ function computeScale(page) {
   } else {
     scale = state.zoomLevel * PT_TO_PX;
   }
+  return Math.min(Math.max(scale / PT_TO_PX, MIN_ZOOM), MAX_ZOOM) * PT_TO_PX;
+}
 
-  // Keep zoomLevel in sync so the percentage readout is truthful even
-  // while in a fit mode.
-  const clamped = Math.min(Math.max(scale / PT_TO_PX, MIN_ZOOM), MAX_ZOOM);
-  state.zoomLevel = clamped;
-  return clamped * PT_TO_PX;
+/** The same, for the page on screen — which also keeps zoomLevel in sync,
+ *  so the percentage readout is truthful even while in a fit mode. */
+function computeScale(page) {
+  const scale = scaleFor(page);
+  state.zoomLevel = scale / PT_TO_PX;
+  return scale;
 }
 
 const clampZoom = (level) => Math.min(Math.max(level, MIN_ZOOM), MAX_ZOOM);
@@ -594,10 +599,12 @@ function pumpHeavyThumbs() {
     if (!rec || rec.thumb || rec.thumbFailed) continue;
     const plot = plotFor(rec);
     if (plot) {
-      // Compiling is quick, but each sheet is a few hundred MB of
-      // geometry on its way through: one at a time.
-      if (plotBusy()) return;
-      if (plot.state === 'none') { startPlot(plot); return; }
+      // Several at once, on the compilers the sheet on screen does not
+      // need (plot.js, plotRoom). Each is a few hundred MB of geometry on
+      // its way through, so not all of them.
+      if (plot.state !== 'none') continue;
+      if (!plotRoom()) return;
+      startPlot(plot);
       continue;
     }
     if (heavyJob) return;
@@ -660,6 +667,7 @@ export function renderMainCanvas(opts = {}) {
     try { activeRenderTask.cancel(); } catch { /* already settled */ }
   }
   wakeSettle();
+  stopAhead();
 
   // Resizing: the canvas already shows this page, this way up, and only
   // its size is changing. Lay it out at the new size *now*, in this call,
@@ -693,6 +701,99 @@ const settle = (ms) => new Promise((resolve) => {
   // The next render does not wait this one's pause out.
   wakeSettle = () => { clearTimeout(timer); resolve(); };
 });
+
+// ---- The pages either side, drawn ahead ----
+//
+// Turning a page waited for pdf.js: 75–200 ms on an ordinary drawing
+// sheet, every time. So once a page has been drawn and nothing else is
+// asked for, the pages before and after it are drawn too, out of sight, at
+// the size they will be shown — and the arrow key that turns to one of
+// them copies it in.
+//
+// Only ordinary pages (heavy ones have their own cache, plot.js), and
+// not at zooms where each copy would be a large share of memory. Anything
+// else the user asks for stops it at once (stopAhead, from
+// renderMainCanvas), so it never delays what is on screen.
+const AHEAD_MS = 150;                // after the page on screen settles
+const AHEAD_MAX_PIXELS = 24e6;       // ~96 MB a copy; beyond this, don't
+const ahead = new Map();             // page -> { rotation, backing, canvas }
+let aheadTimer = 0;
+let aheadTask = null;
+let aheadRun = 0;
+
+function stopAhead() {
+  clearTimeout(aheadTimer);
+  aheadRun++;
+  if (aheadTask) {
+    try { aheadTask.cancel(); } catch { /* already settled */ }
+    aheadTask = null;
+  }
+}
+
+const aheadBacking = (page) => {
+  const { w: Wv, h: Hv } = visualSize(page.rotation, page.W0, page.H0);
+  return clampBackingScale(scaleFor(page) * (window.devicePixelRatio || 1), Wv, Hv);
+};
+
+/** The copy of `page` drawn ahead, if it is still the right one. It is
+ *  handed over, not shared: the cache lets go of it. */
+function takeAhead(page, backing) {
+  const hit = ahead.get(page);
+  if (!hit) return null;
+  ahead.delete(page);
+  if (hit.rotation === page.rotation && hit.backing === backing) return hit.canvas;
+  hit.canvas.width = hit.canvas.height = 0;
+  return null;
+}
+
+function drawAheadSoon(from) {
+  clearTimeout(aheadTimer);
+  const run = ++aheadRun;
+  aheadTimer = setTimeout(() => {
+    // Through the render queue, so it never shares pdf.js with a page
+    // render that is on its way to the screen.
+    renderQueue = renderQueue.then(() => drawAhead(from, run)).then(() => {}, () => {});
+  }, AHEAD_MS);
+}
+
+async function drawAhead(from, run) {
+  const at = state.pages.indexOf(from);
+  if (at < 0 || run !== aheadRun) return;
+  const wanted = [state.pages[at + 1], state.pages[at - 1]].filter(Boolean);
+  // Let go of copies that are no longer either side of the page on screen.
+  for (const [page, hit] of ahead) {
+    if (!wanted.includes(page)) { hit.canvas.width = hit.canvas.height = 0; ahead.delete(page); }
+  }
+  for (const page of wanted) {
+    if (run !== aheadRun) return;
+    if (page.kind !== 'imported' || heavyRecordFor(page)) continue;
+    const backing = aheadBacking(page);
+    const have = ahead.get(page);
+    if (have && have.rotation === page.rotation && have.backing === backing) continue;
+    const { w: Wv, h: Hv } = visualSize(page.rotation, page.W0, page.H0);
+    if (Wv * Hv * backing * backing > AHEAD_MAX_PIXELS) continue;
+    const src = state.sources.find((s) => s.id === page.sourceId);
+    if (!src) continue;
+    const pjPage = await src.pdfjsDoc.getPage(page.sourcePageIndex + 1);
+    if (run !== aheadRun) return;
+    const viewport = pjPage.getViewport({ scale: backing, rotation: normRot(page.rotation) });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+    aheadTask = pjPage.render({ canvasContext: canvas.getContext('2d'), viewport });
+    try {
+      await aheadTask.promise;
+    } catch {
+      canvas.width = canvas.height = 0;     // stopped, or failed: either way, not kept
+      return;
+    } finally {
+      aheadTask = null;
+    }
+    if (run !== aheadRun) { canvas.width = canvas.height = 0; return; }
+    if (have) have.canvas.width = have.canvas.height = 0;
+    ahead.set(page, { rotation: page.rotation, backing, canvas });
+  }
+}
 
 /** Size and place everything for `page` at the current zoom: the canvas's
  *  box, the stack, the markup layer and the scroll position. No pixels —
@@ -820,10 +921,23 @@ async function paintPage(page, token, opts, resizing) {
     // clear it first, and the page would blink white at every step of a
     // zoom. And not until the sizes have stopped coming.
     if (resizing) {
-      // Already sharp at this size: there is nothing to draw.
-      if (held.backing === backing) return;
+      // Already sharp at this size: there is nothing to draw — but the
+      // pages either side may have been interrupted on their way.
+      if (held.backing === backing) { drawAheadSoon(page); return; }
       await settle(ZOOM_SETTLE_MS);
       if (token !== renderToken) return;
+    }
+    // Drawn already, while the last page was being looked at: the step
+    // to it is a copy, not a render.
+    const early = takeAhead(page, backing);
+    if (early) {
+      canvas.width = early.width;
+      canvas.height = early.height;
+      ctx.drawImage(early, 0, 0);
+      early.width = early.height = 0;
+      held = { page, rotation: page.rotation, backing };
+      drawAheadSoon(page);
+      return;
     }
     const src = state.sources.find((s) => s.id === page.sourceId);
     const pjPage = await src.pdfjsDoc.getPage(page.sourcePageIndex + 1);
@@ -859,6 +973,7 @@ async function paintPage(page, token, opts, resizing) {
     }
   }
   held = { page, rotation: page.rotation, backing };
+  drawAheadSoon(page);
 
   // Last, once the page has its final size and scroll position: the plot
   // canvas is placed by where the page actually sits in the stage.

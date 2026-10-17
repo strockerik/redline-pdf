@@ -90,7 +90,12 @@ async function compile({ id, streams, res, box }) {
     };
     let next = streams.length ? ready(streams[0]) : null;
     for (let k = 0; k < streams.length; k++) {
-      if (cancelled.has(id)) { cancelled.delete(id); return; }
+      if (cancelled.has(id)) {
+        cancelled.delete(id);
+        // Said, so the page knows this compiler is free again.
+        self.postMessage({ type: 'cancelled', id });
+        return;
+      }
       stage = 'inflate';
       const data = await next;
       next = k + 1 < streams.length ? ready(streams[k + 1]) : null;

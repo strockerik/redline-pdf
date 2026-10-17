@@ -66,8 +66,10 @@ function refreshHistory(h) {
   const u = $('btnUndo'), r = $('btnRedo');
   u.disabled = !h.canUndo;
   r.disabled = !h.canRedo;
-  u.title = h.canUndo ? `Undo ${h.undoLabel.toLowerCase()} (${MOD_KEY}Z)` : 'Nothing to undo';
-  r.title = h.canRedo ? `Redo ${h.redoLabel.toLowerCase()} (⇧${MOD_KEY}Z)` : 'Nothing to redo';
+  // Read by the hover box, so it always says what the next press will do.
+  u.dataset.tip = h.canUndo ? h.undoLabel : 'Nothing to undo';
+  r.dataset.tip = h.canRedo ? h.redoLabel : 'Nothing to redo';
+  if (tipShownFor === u || tipShownFor === r) fillTip(tipShownFor);
 }
 
 // ============================================================
@@ -407,6 +409,111 @@ function installShortcuts() {
 }
 
 // ============================================================
+// Hover boxes: what a button is, and the key that does the same
+//
+// Every button with a shortcut carries data-tip-name, data-tip and
+// data-key (index.html). Hovering it shows those in a box under it —
+// after a short pause, and then at once while the pointer moves along the
+// row, so reading the tool rail is one sweep, not eight waits. Keyboard
+// focus shows it too. A finger has no hover, so touch never does.
+//
+// They replace the browser's own tooltip on those buttons, which arrives
+// after a second, says it in a sentence with the key in brackets, and
+// cannot be styled.
+// ============================================================
+const TIP_DELAY_MS = 450;
+const TIP_WARM_MS = 600;            // after one closes, the next opens at once
+let tipShownFor = null;
+let tipTimer = 0;
+let tipClosedAt = -Infinity;
+
+/** The key as this platform writes it. */
+const keyLabel = (k) => (MOD_KEY === '⌘' ? k : k.replace(/⇧/g, 'Shift+').replace(/⌘/g, 'Ctrl+').replace(/⌃/g, 'Ctrl+'));
+
+function fillTip(el) {
+  const tip = $('tooltip');
+  const name = document.createElement('span');
+  name.className = 'tip-name';
+  name.textContent = el.dataset.tipName || el.getAttribute('aria-label') || el.textContent.trim();
+  const parts = [name];
+  if (el.dataset.key) {
+    const key = document.createElement('kbd');
+    key.textContent = keyLabel(el.dataset.key);
+    parts.push(key);
+  }
+  if (el.dataset.tip) {
+    const desc = document.createElement('span');
+    desc.className = 'tip-desc';
+    desc.textContent = el.dataset.tip;
+    parts.push(desc);
+  }
+  tip.replaceChildren(...parts);
+}
+
+function placeTip(el) {
+  const tip = $('tooltip');
+  const r = el.getBoundingClientRect();
+  const t = tip.getBoundingClientRect();
+  const margin = 8;
+  let left = r.left + r.width / 2 - t.width / 2;
+  left = Math.max(margin, Math.min(left, window.innerWidth - t.width - margin));
+  // Below, unless that runs off the window.
+  let top = r.bottom + 8;
+  if (top + t.height > window.innerHeight - margin) top = r.top - t.height - 8;
+  tip.style.left = Math.round(left) + 'px';
+  tip.style.top = Math.round(top) + 'px';
+}
+
+function showTip(el) {
+  clearTimeout(tipTimer);
+  const tip = $('tooltip');
+  fillTip(el);
+  show(tip, true);
+  placeTip(el);
+  tipShownFor = el;
+  el.setAttribute('aria-describedby', 'tooltip');
+}
+
+function hideTip() {
+  clearTimeout(tipTimer);
+  if (!tipShownFor) return;
+  tipShownFor.removeAttribute('aria-describedby');
+  tipShownFor = null;
+  tipClosedAt = performance.now();
+  show($('tooltip'), false);
+}
+
+function installTooltips() {
+  const target = (e) => e.target.closest?.('[data-key]');
+
+  document.addEventListener('pointerover', (e) => {
+    if (e.pointerType === 'touch') return;
+    const el = target(e);
+    if (!el || el === tipShownFor) return;
+    hideTip();
+    const wait = performance.now() - tipClosedAt < TIP_WARM_MS ? 0 : TIP_DELAY_MS;
+    tipTimer = setTimeout(() => { if (el.isConnected && !el.hidden) showTip(el); }, wait);
+  });
+  document.addEventListener('pointerout', (e) => {
+    const el = target(e);
+    if (!el || el.contains(e.relatedTarget)) return;
+    clearTimeout(tipTimer);
+    if (el === tipShownFor) hideTip();
+  });
+  // From the keyboard, at once: there is no pointer to rest.
+  document.addEventListener('focusin', (e) => {
+    const el = target(e);
+    if (el && el.matches(':focus-visible')) showTip(el);
+  });
+  document.addEventListener('focusout', (e) => { if (target(e) === tipShownFor) hideTip(); });
+  // Using the button, or anything else, puts the box away.
+  document.addEventListener('pointerdown', () => { clearTimeout(tipTimer); hideTip(); }, true);
+  document.addEventListener('keydown', (e) => { if (e.key !== 'Tab') hideTip(); }, true);
+  window.addEventListener('blur', hideTip);
+  window.addEventListener('scroll', hideTip, true);
+}
+
+// ============================================================
 // First launch: the one caveat that applies here
 // ============================================================
 function platformNote() {
@@ -483,6 +590,7 @@ export function installChrome() {
   installPageNav();
   installMarkups();
   installShortcuts();
+  installTooltips();
 
   // The two ways out of a failed save. Where there is no save panel,
   // Save As *is* a download, so only one of them is offered.

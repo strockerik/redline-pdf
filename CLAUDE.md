@@ -250,6 +250,25 @@ error that only shows up on 90°/270° pages and is miserable to eyeball.
 - **The properties row has a fixed height** and shows only what applies.
   Don't let a control that comes and goes change the height of anything
   above the stage — it re-fits the page.
+- **The ordinary pages either side are drawn ahead** (`ahead` in view.js):
+  once a page is up, its neighbours are rendered out of sight at the size
+  they will be shown, and turning to one copies it in. Every
+  `renderMainCanvas` stops this first (`stopAhead`), and it runs through
+  the render queue, so it never shares pdf.js with a page on its way to
+  the screen. Heavy pages are left to plot.js's own cache.
+- **Heavy sheets compile on a small pool** (`poolSize` in plot.js), one
+  compiler always kept free for the sheet on screen. Background sheets do
+  not start until the sheet on screen is *ready*, labels included —
+  starting them earlier was measured to make that sheet 1–1.5 s later.
+  The rasteriser serves the sheet on screen first.
+- **pdf-lib runs at full pace**: `ParseSpeeds.Fastest` to read, `SAVE_PACE`
+  objects between pauses to write. Its defaults pause every 100 (read) or
+  50 (write) objects on a timer; a 3,600-object set opened 3x faster
+  without them.
+- **A button with a shortcut has `data-key`** (plus `data-tip-name`,
+  `data-tip`, `aria-keyshortcuts`) and gets the hover box from chrome.js.
+  Don't give it a `title` too, or the browser shows its own tooltip as
+  well. Undo and Redo keep their `data-tip` current with what they would do.
 - **A failed save goes to `#saveAlert`, never `setStatus`.** It must stay
   on screen until dealt with.
 - **A trackpad pinch is a `wheel` event with `ctrlKey` set** and is

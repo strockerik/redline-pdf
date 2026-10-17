@@ -1,7 +1,7 @@
 /* Page assembly: import, blank pages, delete, rotate, reorder. */
 import {
   state, normRot, toNative, toVisual, estimateBoxHeight, isPointShape,
-  setStatus, markDirty, resetDocument, finishTyping, BLANK_SIZES, MOD_KEY,
+  setStatus, markDirty, resetDocument, finishTyping, BLANK_SIZES, MOD_KEY, SAVE_PACE,
 } from './state.js';
 import {
   renderThumbnails, renderMainCanvas, updateThumbSelection,
@@ -10,7 +10,7 @@ import {
 import { takeMarkups } from './export.js';
 import { checkpoint, startFresh } from './history.js';
 
-const { PDFDocument } = PDFLib;
+const { PDFDocument, ParseSpeeds } = PDFLib;
 
 // One Web Worker for every document. pdf.js starts a dedicated worker per
 // getDocument() call, and nothing here ever destroys a document — a
@@ -39,7 +39,11 @@ export async function importPdfBytes(bytes, name, { handle = null } = {}) {
   try {
     // pdf-lib keeps views into the buffer it parsed; pdf.js transfers (and
     // detaches) the one it is handed. So they can never share one.
-    const pdfLibDoc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+    // At its default pace pdf-lib stops every 100 objects to let the page
+    // breathe, and each stop is a timer of at least 4 ms: a drawing set of
+    // a few thousand objects spent most of its open time waiting. Reading
+    // a file is quick work; let it run straight through.
+    const pdfLibDoc = await PDFDocument.load(bytes, { ignoreEncryption: true, parseSpeed: ParseSpeeds.Fastest });
 
     // Markups Redline saved earlier come back as markups. They are taken
     // out of the document first, so pdf.js has to be given the document as
@@ -47,7 +51,7 @@ export async function importPdfBytes(bytes, name, { handle = null } = {}) {
     // its editable self.
     const markups = takeMarkups(pdfLibDoc);
     const forPdfjs = markups.size
-      ? await pdfLibDoc.save({ useObjectStreams: false, updateFieldAppearances: false })
+      ? await pdfLibDoc.save({ useObjectStreams: false, updateFieldAppearances: false, objectsPerTick: SAVE_PACE })
       : bytes.slice(0);
     const pdfjsDoc = await pdfjsLib.getDocument({ data: forPdfjs, worker: pdfWorker() }).promise;
 

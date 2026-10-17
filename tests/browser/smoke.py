@@ -1318,6 +1318,68 @@ def surface_checks(ws):
     check("a fit mode is glided to, and then holds", ev(ws, "(async()=>(await import('./js/state.js')).state.zoomMode)()", awaitp=True) == "fit-width"
           and ev(ws, "document.getElementById('btnFitWidth').classList.contains('toggled')") is True)
 
+    # --- a page turned to has already been drawn ---
+    # Once a page is up and nothing else is asked for, the ordinary pages
+    # either side are drawn out of sight; turning to one is a copy.
+    ev(ws, "(async()=>{const {state}=await import('./js/state.js');const p=await import('./js/pages.js');await p.selectPage(state.pages[0].id);})()", awaitp=True)
+    time.sleep(1.0)
+    ev(ws, """(() => { window.__copies = 0; window.__renders2 = 0;
+      const di = CanvasRenderingContext2D.prototype.drawImage;
+      window.__diReal = di;
+      CanvasRenderingContext2D.prototype.drawImage = function (img, ...rest) {
+        if (this.canvas.id === 'pageCanvas' && img instanceof HTMLCanvasElement && img.width > 600) window.__copies++;
+        return di.call(this, img, ...rest); }; })()""")
+    key(ws, "ArrowRight", "ArrowRight", 39)
+    time.sleep(0.1)
+    turned = ev(ws, "({ copies: window.__copies, page: document.getElementById('pageInput').value, w: document.getElementById('pageCanvas').width })")
+    check("turning to the next page shows it at once, drawn ahead", turned["copies"] == 1 and turned["page"] == "2" and turned["w"] > 600, str(turned))
+    time.sleep(1.0)
+    key(ws, "ArrowLeft", "ArrowLeft", 37)
+    time.sleep(0.1)
+    back = ev(ws, "({ copies: window.__copies, page: document.getElementById('pageInput').value })")
+    check("and so does turning back", back["copies"] == 2 and back["page"] == "1", str(back))
+    ev(ws, "CanvasRenderingContext2D.prototype.drawImage = window.__diReal")
+
+    # --- hover a tool, see its key ---
+    def hover(sel):
+        c = ev(ws, f"(r => ({{x: r.left + r.width / 2, y: r.top + r.height / 2}}))(document.querySelector('{sel}').getBoundingClientRect())")
+        ws.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": c["x"], "y": c["y"]})
+    TIP = """(() => { const t = document.getElementById('tooltip'), r = t.getBoundingClientRect();
+      return { shown: !t.hidden, name: t.querySelector('.tip-name')?.textContent, key: t.querySelector('kbd')?.textContent,
+               desc: t.querySelector('.tip-desc')?.textContent, top: r.top, left: r.left, right: r.right }; })()"""
+    ws.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": 5, "y": 700})
+    time.sleep(0.8)
+    hover("#toolPen")
+    time.sleep(0.15)
+    check("a hover box does not jump out at a passing pointer", ev(ws, TIP)["shown"] is False)
+    time.sleep(0.6)
+    tp = ev(ws, TIP)
+    pen = ev(ws, "(r => ({ bottom: r.bottom, left: r.left, right: r.right }))(document.getElementById('toolPen').getBoundingClientRect())")
+    check("resting on a tool shows its name and shortcut key", tp["shown"] and tp["name"] == "Pen" and tp["key"] == "P" and tp["desc"] == "Draw freehand", str(tp))
+    check("in a box just under it", 0 < tp["top"] - pen["bottom"] < 20 and tp["left"] < pen["right"] and tp["right"] > pen["left"], f"{tp} vs {pen}")
+    hover("#toolCallout")
+    time.sleep(0.05)
+    tc = ev(ws, TIP)
+    check("sliding along the row shows the next one at once", tc["shown"] and tc["name"] == "Callout" and tc["key"] == "Q", str(tc))
+    hover("#btnUndo")
+    time.sleep(0.05)
+    tu = ev(ws, TIP)
+    check("undo says what it would undo, and its key", tu["shown"] and tu["key"] == "⌘Z"
+          and tu["desc"] == (st()["hist"]["undoLabel"] or "Nothing to undo"), str(tu))
+    ws.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": 5, "y": 700})
+    time.sleep(0.1)
+    check("moving away puts it away", ev(ws, TIP)["shown"] is False)
+    hover("#toolArrow")
+    time.sleep(0.7)
+    c = ev(ws, "(r => ({x: r.left + r.width / 2, y: r.top + r.height / 2}))(document.getElementById('toolArrow').getBoundingClientRect())")
+    ws.call("Input.dispatchMouseEvent", {"type": "mousePressed", "x": c["x"], "y": c["y"], "button": "left", "clickCount": 1})
+    check("and so does clicking the tool", ev(ws, TIP)["shown"] is False)
+    ws.call("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": c["x"], "y": c["y"], "button": "left", "clickCount": 1})
+    esc()
+    check("every button with a key has the box, not the browser's own tooltip",
+          ev(ws, "[...document.querySelectorAll('[data-key]')].filter((b) => b.hasAttribute('title')).map((b) => b.id)") == []
+          and ev(ws, "document.querySelectorAll('#pageToolbar .tools [data-key]').length") == 8)
+
     # --- a note still being typed when the document changes under it ---
     click(ws, "#toolText")
     tap(*stage_point(ws, 0.8, 0.3))

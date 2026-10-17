@@ -531,6 +531,27 @@ select, input[type=text]{
 }
 #btnPlatformNoteDone:hover{ background:#dbe3ea; border-color:#9fb0bd; }
 
+/* ---------- Hover boxes ---------- */
+/* The name, the key, and a line on what it does (chrome.js). Fixed, so it
+   is never clipped by the scrolling rows the buttons sit in. */
+#tooltip{
+  position:fixed; z-index:90; pointer-events:none;
+  display:grid; grid-template-columns:auto auto; column-gap:10px; row-gap:3px;
+  align-items:center; max-width:300px;
+  background:#0b141c; color:var(--paper);
+  border:1px solid var(--navy-4); border-radius:6px; padding:7px 10px;
+  box-shadow:0 6px 20px rgba(0,0,0,0.45);
+  font-size:12px; line-height:1.35;
+}
+#tooltip .tip-name{ font-weight:600; }
+#tooltip kbd{
+  justify-self:end;
+  font-family:var(--mono); font-size:11.5px; color:var(--white);
+  background:var(--navy-3); border:1px solid var(--navy-4); border-bottom-width:2px;
+  border-radius:4px; padding:1px 7px; min-width:22px; text-align:center;
+}
+#tooltip .tip-desc{ grid-column:1 / -1; color:var(--muted-2); }
+
 /* ---------- Keyboard shortcuts ---------- */
 #shortcutsDialog{
   background:var(--navy-2); color:var(--paper);

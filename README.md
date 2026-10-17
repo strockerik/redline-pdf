@@ -100,7 +100,8 @@ sheet, and saving downloads to the Files app.
 | drag | Pan the page (default) |
 | Space + drag | Pan without leaving the current tool |
 
-`L` still works as an alias for `Q`.
+`L` still works as an alias for `Q`. Rest the pointer on any tool or button
+to see its shortcut.
 
 ## Scrolling
 

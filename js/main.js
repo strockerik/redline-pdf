@@ -195,7 +195,7 @@ function wireUi() {
   if (!canUseFileSystemAccess) {
     $('btnSaveAs').hidden = true;
     $('btnDownload').hidden = true;
-    $('btnSave').title = 'Download the edited PDF — this browser has no save panel. Markups stay editable.';
+    $('btnSave').dataset.tip = 'Downloads the edited PDF — this browser has no save panel. Markups stay editable.';
   }
 
   // --- Pages ---

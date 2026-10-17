@@ -38,13 +38,13 @@
     <div id="statusMsg" role="status" aria-live="polite"></div>
 
     <div class="hdr-group hdr-actions">
-      <button id="btnUndo" disabled title="Undo (⌘Z)"><svg class="ic" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M3 7h6a2.5 2.5 0 010 5H6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path><path d="M5.5 4.5L3 7l2.5 2.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Undo</span></button>
-      <button id="btnRedo" class="icon-only" disabled title="Redo (⇧⌘Z)" aria-label="Redo"><svg class="ic" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M11 7H5a2.5 2.5 0 000 5h3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path><path d="M8.5 4.5L11 7l-2.5 2.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+      <button id="btnUndo" disabled data-tip-name="Undo" data-tip="Nothing to undo" data-key="⌘Z" aria-keyshortcuts="Meta+Z"><svg class="ic" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M3 7h6a2.5 2.5 0 010 5H6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path><path d="M5.5 4.5L3 7l2.5 2.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Undo</span></button>
+      <button id="btnRedo" class="icon-only" disabled aria-label="Redo" data-tip-name="Redo" data-tip="Nothing to redo" data-key="⇧⌘Z" aria-keyshortcuts="Shift+Meta+Z"><svg class="ic" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M11 7H5a2.5 2.5 0 000 5h3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path><path d="M8.5 4.5L11 7l-2.5 2.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
       <div class="divider"></div>
       <!-- One primary action. Every other file command is behind the
            chevron, the rare and the destructive ones last. -->
       <div class="split">
-        <button id="btnSave" class="primary" title="Save over the file you opened (⌘S). Markups stay editable.">Save</button>
+        <button id="btnSave" class="primary" data-tip-name="Save" data-tip="Over the file you opened. Markups stay editable." data-key="⌘S" aria-keyshortcuts="Meta+S">Save</button>
         <button id="btnFileMenu" class="primary" aria-haspopup="menu" aria-expanded="false" aria-controls="fileMenu" aria-label="More file commands" title="More file commands"><svg class="ic" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M2 3.5L5 6.5l3-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
         <div id="fileMenu" class="menu" role="menu" hidden>
           <button id="btnSaveAs" role="menuitem" title="Save to a new file. Markups stay editable.">Save As… <kbd>⇧⌘S</kbd></button>
@@ -64,7 +64,7 @@
 
   <div id="tabBar">
     <div id="tabStrip"></div>
-    <button id="btnNewTab" title="New empty document (⌘T)" aria-label="New document"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 6h6M6 3v6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+    <button id="btnNewTab" aria-label="New document" data-tip-name="New tab" data-tip="An empty document" data-key="⌘T" aria-keyshortcuts="Meta+T"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 6h6M6 3v6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
   </div>
 
   <div id="body">
@@ -115,31 +115,31 @@
           <button id="btnPages" aria-expanded="false" title="Show page thumbnails"><svg class="ic" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><rect x="2.2" y="2.2" width="6.6" height="8.6" rx="1" stroke="currentColor" stroke-width="1.4"></rect><path d="M5.2 11.8h5.6a1 1 0 001-1V5.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Pages</span></button>
         </div>
         <div class="grp tools" role="group" aria-label="Markup tools">
-          <button id="toolSelect" aria-pressed="false" title="Select, move and edit markups; drag the sheet to pan (V or Esc)"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M3.5 2.5l8 4.2-3.4 1-1.3 3.4-3.3-8.6z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Select</span></button>
-          <button id="toolText" aria-pressed="false" title="Text box: click to drop one, or drag to set its width (T)"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><rect x="2.2" y="3.2" width="10.6" height="8.6" rx="1.2" stroke="currentColor" stroke-width="1.5"></rect><path d="M5 6.3h5M5 8.8h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Text</span></button>
-          <button id="toolCallout" aria-pressed="false" title="Callout: click what you are pointing at, then where the note goes (Q)"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><rect x="6" y="2.6" width="6.8" height="5.4" rx="1" stroke="currentColor" stroke-width="1.5"></rect><path d="M6 6.5L2.3 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="2.3" cy="12" r="1.3" fill="currentColor"></circle></svg><span class="lbl">Callout</span></button>
-          <button id="toolPen" aria-pressed="false" title="Draw freehand (P)"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M2.5 12.5l1-3L10 3a1.5 1.5 0 012.1 2.1L5.5 11.5l-3 1z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Pen</span></button>
-          <button id="toolHighlight" aria-pressed="false" title="Highlighter: a broad see-through stroke (H)"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M3 9.5l4.5-4.5 2.5 2.5L5.5 12H3V9.5z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M2.5 13.5h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Highlight</span></button>
-          <button id="toolArrow" aria-pressed="false" title="Arrow: drag from tail to tip (A)"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M3 12L12 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.5 3H12v4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Arrow</span></button>
-          <button id="toolRect" aria-pressed="false" title="Box: drag from corner to corner (R)"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><rect x="2.6" y="3.4" width="9.8" height="8.2" rx="1" stroke="currentColor" stroke-width="1.5"></rect></svg><span class="lbl">Box</span></button>
-          <button id="toolCloud" aria-pressed="false" title="Revision cloud: drag from corner to corner (C)"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M3 9.5a1.6 1.6 0 010-3.2 2 2 0 013.3-1.5 2 2 0 013.4.6 1.8 1.8 0 01.3 3.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M2.8 9.5h8.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Cloud</span></button>
+          <button id="toolSelect" aria-pressed="false" data-tip-name="Select" data-tip="Move and edit markups; drag the sheet to pan" data-key="V" aria-keyshortcuts="V"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M3.5 2.5l8 4.2-3.4 1-1.3 3.4-3.3-8.6z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Select</span></button>
+          <button id="toolText" aria-pressed="false" data-tip-name="Text box" data-tip="Click to drop one, or drag to set its width" data-key="T" aria-keyshortcuts="T"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><rect x="2.2" y="3.2" width="10.6" height="8.6" rx="1.2" stroke="currentColor" stroke-width="1.5"></rect><path d="M5 6.3h5M5 8.8h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Text</span></button>
+          <button id="toolCallout" aria-pressed="false" data-tip-name="Callout" data-tip="Click what you’re pointing at, then where the note goes" data-key="Q" aria-keyshortcuts="Q"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><rect x="6" y="2.6" width="6.8" height="5.4" rx="1" stroke="currentColor" stroke-width="1.5"></rect><path d="M6 6.5L2.3 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="2.3" cy="12" r="1.3" fill="currentColor"></circle></svg><span class="lbl">Callout</span></button>
+          <button id="toolPen" aria-pressed="false" data-tip-name="Pen" data-tip="Draw freehand" data-key="P" aria-keyshortcuts="P"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M2.5 12.5l1-3L10 3a1.5 1.5 0 012.1 2.1L5.5 11.5l-3 1z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Pen</span></button>
+          <button id="toolHighlight" aria-pressed="false" data-tip-name="Highlighter" data-tip="A broad see-through stroke" data-key="H" aria-keyshortcuts="H"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M3 9.5l4.5-4.5 2.5 2.5L5.5 12H3V9.5z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M2.5 13.5h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Highlight</span></button>
+          <button id="toolArrow" aria-pressed="false" data-tip-name="Arrow" data-tip="Drag from tail to tip" data-key="A" aria-keyshortcuts="A"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M3 12L12 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.5 3H12v4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Arrow</span></button>
+          <button id="toolRect" aria-pressed="false" data-tip-name="Box" data-tip="Drag from corner to corner" data-key="R" aria-keyshortcuts="R"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><rect x="2.6" y="3.4" width="9.8" height="8.2" rx="1" stroke="currentColor" stroke-width="1.5"></rect></svg><span class="lbl">Box</span></button>
+          <button id="toolCloud" aria-pressed="false" data-tip-name="Revision cloud" data-tip="Drag from corner to corner" data-key="C" aria-keyshortcuts="C"><svg class="ic" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M3 9.5a1.6 1.6 0 010-3.2 2 2 0 013.3-1.5 2 2 0 013.4.6 1.8 1.8 0 01.3 3.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M2.8 9.5h8.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Cloud</span></button>
         </div>
         <div class="grp rail-right">
           <button id="btnMarkups" aria-expanded="false" aria-controls="markupRail" title="List every markup in this document"><svg class="ic" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M2.5 3.5h9M2.5 7h9M2.5 10.5h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Markups</span><span id="markupCount" class="count">0</span></button>
           <div class="divider"></div>
-          <button id="btnPrevPage" class="icon-only" title="Previous page (←)" aria-label="Previous page"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M7.5 2L4 6l3.5 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+          <button id="btnPrevPage" class="icon-only" aria-label="Previous page" data-tip-name="Previous page" data-tip="" data-key="←" aria-keyshortcuts="ArrowLeft"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M7.5 2L4 6l3.5 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
           <span class="page-box">
             <label for="pageInput" class="sr-only">Page number</label>
             <input id="pageInput" type="text" inputmode="numeric" autocomplete="off" value="" title="Type a page number and press Return. ← and → turn the page.">
             <span id="pageTotal">/ 0</span>
           </span>
-          <button id="btnNextPage" class="icon-only" title="Next page (→)" aria-label="Next page"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 2L8 6l-3.5 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+          <button id="btnNextPage" class="icon-only" aria-label="Next page" data-tip-name="Next page" data-tip="" data-key="→" aria-keyshortcuts="ArrowRight"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 2L8 6l-3.5 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
           <div class="divider"></div>
-          <button id="btnZoomOut" class="icon-only" title="Zoom out (⌘−)" aria-label="Zoom out"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 6h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+          <button id="btnZoomOut" class="icon-only" aria-label="Zoom out" data-tip-name="Zoom out" data-tip="" data-key="⌘−" aria-keyshortcuts="Meta+-"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 6h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
           <button id="zoomReadout" class="readout" title="Reset to 100%">100%</button>
-          <button id="btnZoomIn" class="icon-only" title="Zoom in (⌘+)" aria-label="Zoom in"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 6h6M6 3v6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
-          <button id="btnFitWidth" title="Fit width (⌘0) — scroll to zoom, ⌃scroll to scroll">Fit W</button>
-          <button id="btnFitPage" title="Fit page (⌘9) — scroll to change page, ⌃scroll to zoom">Fit Pg</button>
+          <button id="btnZoomIn" class="icon-only" aria-label="Zoom in" data-tip-name="Zoom in" data-tip="" data-key="⌘+" aria-keyshortcuts="Meta++"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 6h6M6 3v6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+          <button id="btnFitWidth" data-tip-name="Fit width" data-tip="Scroll to zoom, ⌃scroll to scroll" data-key="⌘0" aria-keyshortcuts="Meta+0">Fit W</button>
+          <button id="btnFitPage" data-tip-name="Fit page" data-tip="Scroll to change page, ⌃scroll to zoom" data-key="⌘9" aria-keyshortcuts="Meta+9">Fit Pg</button>
         </div>
       </div>
 
@@ -170,8 +170,8 @@
           <input type="checkbox" id="fitToggle">
           <span>Shrink to text</span>
         </label>
-        <button id="btnDuplicate" hidden title="Make a second copy of the selected markup (⌘D)">Duplicate <kbd>⌘D</kbd></button>
-        <button id="btnDeleteAnno" class="danger-ghost" hidden disabled title="Delete the selected markup (Delete)">Delete</button>
+        <button id="btnDuplicate" hidden data-tip-name="Duplicate" data-tip="A second copy of the selected markup" data-key="⌘D" aria-keyshortcuts="Meta+D">Duplicate <kbd>⌘D</kbd></button>
+        <button id="btnDeleteAnno" class="danger-ghost" hidden disabled data-tip-name="Delete" data-tip="The selected markup" data-key="Delete" aria-keyshortcuts="Delete">Delete</button>
         <span id="armedNote" class="armed" hidden>
           <span class="k">Next</span>
           <span><span id="armedText"></span> — <kbd>Esc</kbd> cancels</span>
@@ -214,7 +214,7 @@
              shows an older line than this file does, the installed app is
              still serving a cached copy. tests/analyze.py checks the two
              numbers agree. -->
-        <span id="buildStamp">rev 0.25 · 2026-10-11 · an update can no longer install the previous build</span>
+        <span id="buildStamp">rev 0.26 · 2026-10-17 · pages turn at once, sheets compile side by side, shortcut keys on hover</span>
       </div>
     </div>
 
@@ -233,6 +233,9 @@
 </div>
 
 <div id="placeHint" role="status"></div>
+
+<!-- The hover box for anything with a keyboard shortcut (chrome.js). -->
+<div id="tooltip" role="tooltip" hidden></div>
 
 <div id="dropOverlay">
   <div class="drop-card">Drop a PDF to open it</div>

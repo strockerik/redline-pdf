@@ -15,7 +15,7 @@
 import {
   state, toNative, textCompensationDegrees, hexToRgb01, normRot,
   computeLeader, computeArrowWings, shapePolylines, isPointShape, POINT_TYPES,
-  ANNO_PAD, LINE_HEIGHT_MULT, HIGHLIGHT_OPACITY,
+  ANNO_PAD, LINE_HEIGHT_MULT, HIGHLIGHT_OPACITY, SAVE_PACE,
 } from './state.js';
 
 const {
@@ -494,5 +494,5 @@ export async function buildPdfBytes({ flatten = false } = {}) {
     }
   }
 
-  return outDoc.save();
+  return outDoc.save({ objectsPerTick: SAVE_PACE });
 }

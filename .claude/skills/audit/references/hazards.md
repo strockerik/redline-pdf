@@ -314,6 +314,13 @@ launch starts empty; `persist.js` keeps four preferences in localStorage.
   one that can disagree. A field added to `state` should be per-document or
   app-wide by conscious decision — `tests/analyze.py` will refuse to guess
   for you.
+- **Did it measure faster?** Speed changes are kept only when a benchmark
+  says so. In 0.26 two plausible ones measured as nothing and were taken
+  out again — starting pdf.js's worker during boot, and holding the
+  thumbnails back until the first page was drawn — and a third, letting
+  background sheets compile while the sheet on screen drew its labels,
+  made that sheet 1.4 s *slower*. Time it before and after, in a real
+  Chrome, more than once.
 - **Does this earn its complexity?** The tab feature swaps fields on
   `state` precisely so that four other modules did not have to change.
   Prefer the version that leaves the rest of the app alone.

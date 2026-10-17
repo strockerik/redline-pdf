@@ -49,6 +49,7 @@ function getRenderer() {
     onCanvas = { rec: null, sig: '' };
     live.clear();
     jobs.clear();
+    for (const slot of pool) slot.jobs.clear();
     emit(null, 'reset');
   });
   return renderer;
@@ -61,22 +62,55 @@ export function plotAvailable() {
   return !!r && !r.isLost();
 }
 
-let worker = null;
 let nextJob = 1;
 const jobs = new Map();             // job id -> record
 
-function getWorker() {
-  if (worker) return worker;
-  worker = new Worker(new URL('./plotworker.js', import.meta.url), { type: 'module' });
-  worker.onmessage = (e) => onWorkerMessage(e.data);
-  worker.onerror = (e) => {
+// A small pool of compilers. With one, a drawing set's sheets compiled
+// strictly one after another: the Bernalillo set's four were ready at 2.9,
+// 4.9, 6.0 and 6.6 s, and paging to a sheet early meant waiting for it.
+// Several run side by side, on cores that were otherwise idle. One is
+// always kept back for the sheet on screen (see plotRoom), so a sheet the
+// user turns to never queues behind ones compiled for the thumbnail rail.
+// A phone keeps one: there memory, not time, is what runs out.
+const poolSize = () => (smallDevice() ? 1 : Math.max(1, Math.min(3, (navigator.hardwareConcurrency || 2) - 2)));
+const pool = [];                    // { w: Worker, jobs: Set<job id> }
+
+function spawnWorker() {
+  const slot = { w: new Worker(new URL('./plotworker.js', import.meta.url), { type: 'module' }), jobs: new Set() };
+  slot.w.onmessage = (e) => onWorkerMessage(e.data, slot);
+  slot.w.onerror = (e) => {
     // The worker itself is broken (it failed to load, say). Nothing queued
     // on it will ever answer.
     console.warn('plot worker failed', e.message || e);
-    for (const rec of [...jobs.values()]) fail(rec, 'worker failed');
-    worker = null;
+    const at = pool.indexOf(slot);
+    if (at >= 0) pool.splice(at, 1);
+    for (const id of slot.jobs) { const rec = jobs.get(id); if (rec) fail(rec, 'worker failed'); }
+    slot.jobs.clear();
   };
-  return worker;
+  pool.push(slot);
+  return slot;
+}
+
+/** An idle compiler if there is one, a new one while the pool has room,
+ *  and otherwise the one with the least queued. */
+function workerFor() {
+  const idle = pool.find((s) => s.jobs.size === 0);
+  if (idle) return idle;
+  if (pool.length < poolSize()) return spawnWorker();
+  return pool.reduce((a, b) => (b.jobs.size < a.jobs.size ? b : a));
+}
+
+/** Whether a sheet that is not on screen may start compiling now. One
+ *  compiler stays free for the sheet that is (unless the pool is one). */
+export function plotRoom() {
+  // Not until the sheet on screen is finished — labels and all. Measured
+  // on the Bernalillo set: a second compile alongside the first sheet's
+  // made that sheet later by more than a second, and starting the others
+  // while its labels were still being drawn cost it as much again (their
+  // geometry uploads take the main thread its labels need).
+  if (shownRec && shownRec.state !== 'ready' && shownRec.state !== 'failed') return false;
+  const n = poolSize();
+  return jobs.size < (n > 1 ? n - 1 : 1);
 }
 
 // pdf.js for the residual documents gets a worker of its own, so a label
@@ -116,7 +150,7 @@ export function plotRecord(src, index) {
   return rec;
 }
 
-export const plotBusy = () => jobs.size > 0;
+
 
 /** Begin compiling, if that has not already happened. */
 export function startPlot(rec) {
@@ -137,13 +171,19 @@ export function startPlot(rec) {
   rec.used = ++clock;
   live.add(rec);
   jobs.set(rec.job, rec);
-  getWorker().postMessage(
+  const slot = workerFor();
+  slot.jobs.add(rec.job);
+  rec.slot = slot;
+  slot.w.postMessage(
     { type: 'compile', id: rec.job, streams: input.streams, res: input.res, box: input.box },
     input.streams.map((s) => s.bytes.buffer),
   );
 }
 
-function onWorkerMessage(m) {
+function onWorkerMessage(m, slot) {
+  // A compiler is free again once its job is over, however it ended —
+  // including a job that was released while it ran.
+  if (m.type === 'done' || m.type === 'fail' || m.type === 'cancelled') slot.jobs.delete(m.id);
   const rec = jobs.get(m.id);
   if (!rec) return;                 // released while the worker was busy
   const r = getRenderer();
@@ -228,7 +268,7 @@ function release(rec) {
   clearTimeout(rec.settleTimer);
   if (jobs.has(rec.job)) {
     jobs.delete(rec.job);
-    worker?.postMessage({ type: 'cancel', id: rec.job });
+    rec.slot?.w.postMessage({ type: 'cancel', id: rec.job });
   }
   if (rec.page) getRenderer()?.releasePage(rec.page);
   rec.page = null;
@@ -457,39 +497,57 @@ async function buildResidual(rec, residual, layerCount) {
 
 // pdf.js draws one thing at a time here; the bitmaps are small and nothing
 // is gained by overlapping them.
-let rasterQueue = Promise.resolve();
+// One pdf.js render at a time, but not first come first served: with
+// several sheets compiling at once, the sheet on screen would otherwise
+// wait for its labels behind the image layers of sheets nobody is looking
+// at. Its jobs go to the front.
+const rasterJobs = [];
+let rastering = false;
+
+async function pumpRaster() {
+  if (rastering) return;
+  rastering = true;
+  while (rasterJobs.length) {
+    let at = rasterJobs.findIndex((j) => j.rec === shownRec);
+    if (at < 0) at = 0;
+    const [job] = rasterJobs.splice(at, 1);
+    try { job.resolve(await job.work()); } catch (err) { job.reject(err); }
+  }
+  rastering = false;
+}
 
 /** Draw one residual layer over `box` (page space) at `scale` px per pt,
  *  unrotated, on a transparent background. */
 function rasterize(rec, layerName, box, scale, withAnnotations) {
-  const run = rasterQueue.then(async () => {
-    const { doc, pjPage } = rec;
-    if (!doc) throw new Error('released');
-    const w = Math.max(1, Math.ceil((box[2] - box[0]) * scale));
-    const h = Math.max(1, Math.ceil((box[3] - box[1]) * scale));
-    const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
-    const viewport = pjPage.getViewport({
-      scale, rotation: 0,
-      offsetX: -(box[0] - rec.box[0]) * scale,
-      offsetY: -(rec.box[3] - box[3]) * scale,
-    });
-    const config = await doc.getOptionalContentConfig();
-    const groups = config.getGroups() || {};
-    for (const id of Object.keys(groups)) config.setVisibility(id, groups[id].name === layerName);
-    await pjPage.render({
-      canvasContext: canvas.getContext('2d'),
-      viewport,
-      background: 'rgba(0,0,0,0)',
-      annotationMode: withAnnotations ? pdfjsLib.AnnotationMode.ENABLE : pdfjsLib.AnnotationMode.DISABLE,
-      optionalContentConfigPromise: Promise.resolve(config),
-    }).promise;
-    // The bitmap's edges, back in page space (the size was rounded up).
-    return { canvas, rect: [box[0], box[3] - h / scale, box[0] + w / scale, box[3]] };
+  return new Promise((resolve, reject) => {
+    rasterJobs.push({ rec, resolve, reject, work: async () => {
+      const { doc, pjPage } = rec;
+      if (!doc) throw new Error('released');
+      const w = Math.max(1, Math.ceil((box[2] - box[0]) * scale));
+      const h = Math.max(1, Math.ceil((box[3] - box[1]) * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const viewport = pjPage.getViewport({
+        scale, rotation: 0,
+        offsetX: -(box[0] - rec.box[0]) * scale,
+        offsetY: -(rec.box[3] - box[3]) * scale,
+      });
+      const config = await doc.getOptionalContentConfig();
+      const groups = config.getGroups() || {};
+      for (const id of Object.keys(groups)) config.setVisibility(id, groups[id].name === layerName);
+      await pjPage.render({
+        canvasContext: canvas.getContext('2d'),
+        viewport,
+        background: 'rgba(0,0,0,0)',
+        annotationMode: withAnnotations ? pdfjsLib.AnnotationMode.ENABLE : pdfjsLib.AnnotationMode.DISABLE,
+        optionalContentConfigPromise: Promise.resolve(config),
+      }).promise;
+      // The bitmap's edges, back in page space (the size was rounded up).
+      return { canvas, rect: [box[0], box[3] - h / scale, box[0] + w / scale, box[3]] };
+    } });
+    pumpRaster();
   });
-  rasterQueue = run.then(() => {}, () => {});
-  return run;
 }
 
 // ============================================================
