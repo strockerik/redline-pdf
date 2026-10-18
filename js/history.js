@@ -42,6 +42,11 @@ function capture() {
     docName: state.docName,
     fileHandle: state.fileHandle,
     combined: state.combined,
+    // Which sources are in the document decides whether it can be
+    // written at all, so the locked flag has to travel with them:
+    // undoing the merge that brought a locked file in makes the
+    // document savable again.
+    locked: state.locked,
   };
 }
 
@@ -57,6 +62,7 @@ function restore(snap) {
   state.docName = snap.docName;
   state.fileHandle = snap.fileHandle;
   state.combined = snap.combined;
+  state.locked = snap.locked;
   state.selectedAnnoId = null;
   state.pendingCalloutTip = null;
   // Go to where the change was made: undoing something on a page that is

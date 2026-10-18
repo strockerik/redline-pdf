@@ -634,6 +634,154 @@ def markup_checks(ws):
     shot(ws, "12-flattened")
 
 
+def typing_checks(ws):
+    """⌘S while a note is still being typed into.
+
+    A note's text is committed when its box loses focus and nowhere else,
+    and ⌘S runs straight off the keystroke (main.js) — with a file handle
+    already granted, nothing in the save path takes the focus away. So the
+    bytes written were the text from before the edit, and the document was
+    then marked clean: work gone, and beforeunload no longer warning about
+    it. The other half is the same gap on screen: until the first
+    keystroke marked the document dirty, an edit to a note on a clean
+    document was work the save chip did not count.
+    """
+    print("\n=== a note being typed into, and the save ===")
+
+    def mouse(kind, x, y):
+        ws.call("Input.dispatchMouseEvent", {"type": kind, "x": x, "y": y, "button": "left",
+                                             "buttons": 0 if kind == "mouseReleased" else 1, "clickCount": 1})
+
+    def tap(x, y):
+        mouse("mousePressed", x, y)
+        mouse("mouseReleased", x, y)
+        time.sleep(0.25)
+
+    def typed(text):
+        ws.call("Input.insertText", {"text": text})
+        time.sleep(0.2)
+
+    def to_client(x, y):
+        g = ev(ws, """(async()=>{const {state}=await import('./js/state.js');
+          const r=document.getElementById('pageCanvas').getBoundingClientRect();
+          return {l:r.left,t:r.top,s:state.currentScale}})()""", awaitp=True)
+        return g["l"] + x * g["s"], g["t"] + y * g["s"]
+
+    ST = """(async () => {
+      const { state } = await import('./js/state.js');
+      const p = state.pages.find((x) => x.id === state.selectedPageId);
+      const box = document.querySelector('.anno-box .anno-text');
+      return {
+        dirty: state.dirty,
+        texts: p ? p.annotations.map((a) => a.text) : [],
+        onScreen: box ? box.innerText : '',
+        editing: !!document.querySelector('.anno-box.editing'),
+        focused: document.activeElement.classList.contains('anno-text'),
+        chip: document.getElementById('saveChipText').textContent,
+        warns: document.getElementById('saveChip').classList.contains('unsaved'),
+        status: document.getElementById('statusMsg').textContent,
+        writes: window.__w.writes,
+      };
+    })()"""
+    st = lambda: ev(ws, ST, awaitp=True)
+
+    # One document, from a file, with somewhere to save to. The sections
+    # before this one leave tabs open with work in them, and the chip
+    # answers for every tab there is.
+    ev(ws, """(() => {
+      window.confirm = () => true;
+      let guard = 0;
+      while (guard++ < 40) {
+        const close = document.querySelector('#tabStrip .tab .tab-close');
+        if (!close) break;
+        close.click();
+        if (document.querySelectorAll('#tabStrip .tab').length === 1
+            && !document.querySelector('#tabStrip .tab-dot')) break;
+      }
+    })()""")
+    time.sleep(0.6)
+
+    # A save panel of this section's own, and the bytes of each write kept
+    # apart: what matters here is what the *last* one holds.
+    ev(ws, """(async () => {
+      window.__w = { writes: 0, bytes: null };
+      window.__realPicker = window.showSaveFilePicker;
+      window.showSaveFilePicker = async () => {
+        const h = { kind: 'file', name: 'typed.pdf' };
+        const def = (k, v) => Object.defineProperty(h, k, { value: v, enumerable: false });
+        def('queryPermission', async () => 'granted');
+        def('requestPermission', async () => 'granted');
+        def('createWritable', async () => {
+          const chunks = [];
+          return {
+            write: async (d) => { chunks.push(d instanceof Blob ? new Uint8Array(await d.arrayBuffer()) : new Uint8Array(d.buffer || d)); },
+            close: async () => {
+              window.__w.bytes = new Uint8Array(await new Blob(chunks).arrayBuffer());
+              window.__w.writes++;
+            },
+          };
+        });
+        return h;
+      };
+      window.__textsInWritten = async () => {
+        const doc = await pdfjsLib.getDocument({ data: window.__w.bytes.slice() }).promise;
+        const pg = await doc.getPage(1);
+        return (await pg.getAnnotations()).map((a) => a.contentsObj && a.contentsObj.str).filter(Boolean);
+      };
+      const tabs = await import('./js/tabs.js'), pages = await import('./js/pages.js');
+      const view = await import('./js/view.js');
+      tabs.openDocument();
+      const buf = await (await fetch('./tests/browser/fixture.pdf')).arrayBuffer();
+      await pages.importPdfBytes(buf, 'typed.pdf');
+      view.setZoomMode('fit-width');
+      await view.renderMainCanvas();
+    })()""", awaitp=True)
+    time.sleep(0.8)
+
+    # Place a note, finish it, and save: from here the document has a file
+    # and ⌘S writes straight back to it, which is the case that lost work.
+    click(ws, "#toolText")
+    tap(*stage_point(ws, 0.25, 0.2))
+    typed("first draft")
+    key(ws, "Enter", "Enter", 13, meta=True)
+    key(ws, "s", "KeyS", 83, meta=True)
+    wait_for(ws, "window.__w.writes === 1", label="the first save wrote the file")
+    s = st()
+    check("a note typed and saved is on disk", s["texts"] == ["first draft"] and s["dirty"] is False
+          and s["chip"].startswith("Saved ") and s["warns"] is False, f"{s['texts']} {s['chip']!r}")
+
+    # Open it again and type into it, without clicking away afterwards.
+    note = ev(ws, """(async () => { const { state } = await import('./js/state.js');
+      const a = state.pages.find((p) => p.id === state.selectedPageId).annotations[0];
+      return { x: a.x, y: a.y }; })()""", awaitp=True)
+    nx, ny = to_client(note["x"] + 8, note["y"] + 8)
+    tap(nx, ny)                      # select it
+    tap(nx, ny)                      # already selected: this opens it for typing
+    check("a note on the page opens for typing", st()["editing"] is True and st()["focused"] is True)
+    typed(" — revised on site")
+    s = st()
+    check("the first keystroke makes the document unsaved", s["dirty"] is True
+          and "unsaved" in s["chip"].lower() and s["warns"] is True, f"{s['dirty']} {s['chip']!r}")
+    check("while the typed text is still only on screen", s["texts"] == ["first draft"]
+          and s["onScreen"] == "first draft — revised on site", f"{s['texts']} / {s['onScreen']!r}")
+
+    # ⌘S with the caret still in the box.
+    key(ws, "s", "KeyS", 83, meta=True)
+    wait_for(ws, "window.__w.writes === 2", label="⌘S wrote the file again")
+    s = st()
+    check("⌘S finishes the note before it writes", s["editing"] is False and s["focused"] is False
+          and s["texts"] == ["first draft — revised on site"], f"{s['editing']} {s['texts']}")
+    written = ev(ws, "window.__textsInWritten()", awaitp=True)
+    check("so the file holds the text as typed, not as it was before the edit",
+          written == ["first draft — revised on site"], str(written))
+    s = st()
+    check("and only then is the document clean again",
+          s["dirty"] is False and s["chip"].startswith("Saved ") and s["warns"] is False,
+          f"{s['dirty']} {s['chip']!r}")
+    shot(ws, "26-typed-then-saved")
+    ev(ws, "window.showSaveFilePicker = window.__realPicker")
+
+
 def surface_checks(ws):
     """The command surface, driven the way a person drives it: undo for
     every action, tools that are used once, the four shape tools, one Save,
@@ -690,6 +838,26 @@ def surface_checks(ws):
     esc = lambda: key(ws, "Escape", "Escape", 27)
     undo = lambda: key(ws, "z", "KeyZ", 90, meta=True)
     redo = lambda: key(ws, "z", "KeyZ", 90, meta=True, shift=True)
+
+    # The markup section left its documents open, each with unsaved edits.
+    # This one is about the command surface of a single document — and the
+    # save chip now answers for every tab there is — so they are closed
+    # first, through the close button, the way a person would.
+    ev(ws, """(() => {
+      window.confirm = () => true;
+      // Every one of them: closing the last leaves a fresh empty
+      // document behind, which is what this section wants to start from.
+      let guard = 0;
+      while (guard++ < 40) {
+        const close = document.querySelector('#tabStrip .tab .tab-close');
+        if (!close) break;
+        close.click();
+        if (document.querySelectorAll('#tabStrip .tab').length === 1
+            && !document.querySelector('#tabStrip .tab-dot')) break;
+      }
+      return document.querySelectorAll('#tabStrip .tab').length;
+    })()""")
+    time.sleep(0.6)
 
     ev(ws, """(async () => {
       const tabs = await import('./js/tabs.js'), pages = await import('./js/pages.js');
@@ -1246,6 +1414,23 @@ def surface_checks(ws):
     wait_for(ws, "document.getElementById('saveAlertWhy').textContent.includes('disk full')", timeout=15, label="write failed")
     check("a write that fails says why", st()["dirty"] is True)
 
+    # The banner is a message; the chip is the state. A document whose last
+    # write did not happen has to go on saying so after the message is put
+    # away — the file on disk is the only copy there is.
+    chipState = lambda: ev(ws, """(() => ({
+      text: document.getElementById('saveChipText').textContent,
+      failed: document.getElementById('saveChip').classList.contains('failed'),
+      banner: document.getElementById('saveAlert').classList.contains('show'),
+    }))()""")
+    c = chipState()
+    check("and the chip stops counting changes and says the save failed",
+          c["failed"] is True and "NOT SAVED" in c["text"], str(c))
+    click(ws, "#btnAlertDismiss")
+    time.sleep(0.4)
+    c = chipState()
+    check("dismissing the banner takes away the banner and nothing else",
+          c["banner"] is False and c["failed"] is True and "NOT SAVED" in c["text"], str(c))
+
     ev(ws, "window.__handle.createWritable = async () => ({ write: async () => { window.__writes++; }, close: async () => {} })")
     key(ws, "s", "KeyS", 83, meta=True)
     wait_for(ws, "document.getElementById('statusMsg').textContent.includes('Saved')", timeout=30, label="saved")
@@ -1766,6 +1951,34 @@ def tab_checks(ws):
     check("thumbnails belong to the newly active document",
           ev(ws, "document.querySelectorAll('#thumbList .thumb').length") == 3,
           f"{ev(ws, 'document.querySelectorAll(\'#thumbList .thumb\').length')} thumbs")
+
+    # --- the chip answers for every tab, not just this one ---
+    # alpha is exactly what is on disk; beta is holding an unsaved blank
+    # page out of sight. A chip that reads "No unsaved changes" here is the
+    # one sentence this app cannot afford to get wrong.
+    chip = ev(ws, """(() => {
+      const more = document.getElementById('saveChipOthers');
+      return {
+        text: document.getElementById('saveChipText').textContent,
+        others: more.hidden ? null : more.textContent,
+        warn: document.getElementById('saveChip').classList.contains('unsaved'),
+        marks: [...document.querySelectorAll('#tabStrip .tab')].map((t) =>
+          (t.classList.contains('dirty') ? 'dirty' : 'clean') + (t.querySelector('.tab-dot') ? '+dot' : '')),
+      };
+    })()""")
+    check("a saved document never reads clean while another tab is unsaved",
+          chip["text"] != "No unsaved changes" and chip["warn"] is True, str(chip))
+    check("and the chip counts the tabs that are out of sight",
+          chip["others"] == "· 1 other tab unsaved", repr(chip["others"]))
+    check("the unsaved tab is marked and the saved one is not",
+          chip["marks"] == ["clean", "dirty+dot"], str(chip["marks"]))
+    click(ws, "#saveChipOthers")
+    time.sleep(1.2)
+    d = docs()
+    check("pressing it goes to the tab that is holding the work",
+          d["active"] == "beta.pdf" and ev(ws, "document.getElementById('saveChipOthers').hidden") is True, str(d))
+    click(ws, "#tabStrip .tab:first-child")
+    time.sleep(1.2)
     shot(ws, "09-tabs")
 
     # Clear All empties the active document, and only that one.
@@ -1786,6 +1999,8 @@ def tab_checks(ws):
         check("closing a document leaves the other", docs()["n"] == 1, str(docs()))
         check("tab strip hides again at one document",
               ev(ws, "document.getElementById('tabBar').classList.contains('show')") is False)
+        check("and the chip drops its second half, leaving the header as it was",
+              ev(ws, "document.getElementById('saveChipOthers').hidden") is True)
 
     # --- the shared <input type=file> fallback (iOS / Safari path) ---
     # Both open modes drive the same hidden input, so the mode is armed just
@@ -1895,15 +2110,30 @@ def lifecycle_checks(ws):
       state.fileHandle = {{ kind: 'file', name: 'locked.pdf', queryPermission: async () => 'granted',
         createWritable: async () => {{ wrote = true; return {{ write: async () => {{}}, close: async () => {{}} }}; }} }};
       await files.save();
+      const vis = (id) => {{ const el = document.getElementById(id); return !!el && !el.hidden; }};
       const r = {{ opened, wrote, alert: document.getElementById('saveAlert').classList.contains('show'),
-                  why: document.getElementById('saveAlertWhy').textContent }};
+                  why: document.getElementById('saveAlertWhy').textContent,
+                  chip: document.getElementById('saveChipText').textContent,
+                  classes: document.getElementById('saveChip').className,
+                  savePrimary: document.getElementById('btnSave').classList.contains('primary'),
+                  tabLock: !!document.querySelector('#tabStrip .tab.active .tab-lock'),
+                  ways: ['btnAlertSaveAs', 'btnAlertDownload', 'btnAlertUnderstood'].filter(vis) }};
       files.dismissSaveAlert();
+      r.stillLocked = document.getElementById('saveChip').classList.contains('locked');
       return r;
     }})()""", awaitp=True)
     check("a file locked by its author opens, and says it can't be saved",
           r["opened"]["pages"] == 1 and "locked" in r["opened"]["status"], str(r["opened"]))
     check("saving it is refused before the file is touched", r["wrote"] is False, str(r))
     check("and the refusal stays on screen, saying why", r["alert"] and "locked" in r["why"], r["why"])
+    # Every way of writing it goes through the same refusal, flatten
+    # included, so the two usual ways out are dead ends and are not
+    # offered: there is nothing to do but know.
+    check("the refusal offers only what works", r["ways"] == ["btnAlertUnderstood"], str(r["ways"]))
+    check("a locked document never reads clean",
+          "Locked" in r["chip"] and "locked" in r["classes"] and r["stillLocked"] is True, f'{r["chip"]!r} {r["classes"]!r}')
+    check("and Save is not offered as the thing to do", r["savePrimary"] is False, r["classes"])
+    check("its tab says so too", r["tabLock"] is True, str(r["tabLock"]))
 
     r = ev(ws, f"""(async () => {{ {MODS}
       tabs.openDocument(); const n = state.pages.length;
@@ -2835,6 +3065,7 @@ def main():
         launch_checks(ws3)
         markup_checks(ws3)
         surface_checks(ws3)
+        typing_checks(ws3)
         ai_checks(ws3)
         lifecycle_checks(ws3)
     except TimeoutError:

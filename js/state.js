@@ -137,6 +137,14 @@ export const state = {
   // where to put it rather than overwrite whichever file came first.
   combined: false,
   dirty: false,
+  // Whether this document can be written at all, and whether the last
+  // attempt to write it did. One encrypted source makes the whole
+  // document unsavable — export refuses it before a byte exists — and a
+  // save that failed has to stay said until a later one succeeds:
+  // nothing here is kept between launches, so the file on disk is the
+  // only copy there is.
+  locked: false,
+  saveFailed: false,
 
   // Tabs. `docs` holds every open document; the one whose id is
   // activeDocId owns the live fields above.
@@ -157,7 +165,7 @@ export const state = {
 const DOC_FIELDS = [
   'sources', 'pages', 'nextSourceId', 'nextPageId', 'nextAnnoId',
   'selectedPageId', 'selectedAnnoId', 'docName', 'fileHandle',
-  'combined', 'dirty',
+  'combined', 'dirty', 'locked', 'saveFailed',
 ];
 
 export function blankDoc() {
@@ -168,6 +176,7 @@ export function blankDoc() {
     selectedPageId: null, selectedAnnoId: null,
     docName: 'Untitled.pdf', fileHandle: null,
     combined: false, dirty: false,
+    locked: false, saveFailed: false,
   };
 }
 
@@ -224,6 +233,8 @@ export function resetDocument() {
   state.fileHandle = null;
   state.combined = false;
   state.dirty = false;
+  state.locked = false;
+  state.saveFailed = false;
 }
 
 // ============================================================

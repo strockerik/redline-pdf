@@ -85,6 +85,20 @@ header{
   border:1px solid transparent; border-radius:4px; padding:3px 9px;
 }
 .save-chip.unsaved{ background:#3a2410; border-color:#5a3a1e; color:#f3c089; }
+/* A document no write can reach, and a write that did not happen. Both
+   outrank "unsaved", because neither is answered by pressing Save. */
+.save-chip.locked{ background:var(--navy-2); border-color:var(--navy-4); color:var(--muted-2); }
+.save-chip.failed{ background:#3a1d1d; border-color:#c05050; color:#ffd2d2; }
+/* The second half: the tabs you cannot see. A button, but part of the
+   chip rather than a thing of its own beside it. */
+.chip-others{
+  background:transparent; border:none; padding:0; margin:0;
+  font:inherit; color:inherit; letter-spacing:inherit;
+  text-decoration:underline; text-decoration-style:dotted;
+  text-underline-offset:2px; cursor:pointer;
+}
+.chip-others:hover{ color:var(--white); }
+.chip-others:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; border-radius:3px; }
 .dirty-dot{
   width:8px; height:8px; border-radius:50%; background:#e89a4f;
   flex-shrink:0;
@@ -208,10 +222,20 @@ select, input[type=text]{
   overflow:hidden; text-overflow:ellipsis;
 }
 .tab.active .tab-name{ color:var(--white); }
+/* Work that is only in memory, on a tab that may not be the one in
+   front. The ring is what makes the dot carry at a glance across a strip
+   of tabs; the name goes with it, because a 6px dot on its own was
+   missed. */
+.tab.dirty .tab-name{ color:#f3c089; }
+.tab.dirty.active .tab-name{ color:#ffd9ab; }
 .tab-dot{
   width:6px; height:6px; border-radius:50%;
   background:var(--accent); flex-shrink:0;
+  box-shadow:0 0 0 1.5px rgba(232,154,79,0.35);
 }
+/* A file that can never be written, said beside its name. */
+.tab-lock{ display:flex; align-items:center; color:var(--muted-2); flex-shrink:0; }
+.tab.locked .tab-name{ color:var(--muted-2); }
 .tab-close{
   background:transparent; border:none; color:var(--muted);
   font-size:15px; line-height:1; padding:2px 4px; min-width:20px;
@@ -262,19 +286,21 @@ select, input[type=text]{
 .page-edits-row > button:not(.icon-only), .page-edits-row > select{ flex:1 1 0; min-width:0; }
 .page-edits button{ padding:6px 8px; font-size:12px; }
 
-/* The save that did not happen. Over the sheet rather than above it, so
-   that appearing and leaving never re-fit the page. */
+/* The save that did not happen. A band across the top of the editor,
+   between the tabs and the tool row — in the flow, so it pushes the sheet
+   down instead of covering the tool row and the properties row, which are
+   where its own advice sends you. The sheet is re-fitted when it comes
+   and goes (files.js). */
 #saveAlert{
   display:none;
-  position:absolute; top:10px; left:50%; transform:translateX(-50%); z-index:45;
-  width:max-content; max-width:calc(100% - 24px);
   align-items:center; gap:10px;
   background:#3a1d1d; color:var(--white);
-  border:1px solid #c05050; border-radius:7px; padding:10px 12px;
-  box-shadow:0 8px 26px rgba(0,0,0,0.5);
+  border-bottom:1px solid #c05050; padding:9px calc(14px + var(--safe-r)) 9px calc(14px + var(--safe-l));
   font-size:12.5px; line-height:1.45;
+  flex-shrink:0;
 }
 #saveAlert.show{ display:flex; }
+#saveAlert .alert-text{ flex:1; }
 #saveAlert .alert-text{ min-width:0; }
 #saveAlert strong{ display:block; }
 #saveAlertWhy{ color:#f0b8b8; overflow-wrap:anywhere; }
@@ -772,6 +798,25 @@ circle.callout-preview, line.callout-preview{ pointer-events:none; opacity:0.75;
   padding:34px 52px; color:var(--white);
   font-family:var(--mono); font-size:14px; letter-spacing:0.5px;
   background:rgba(28,47,64,0.9);
+}
+/* The two answers, side by side: half the window each, so there is no
+   gap between them that a drop can land in. */
+#dropZones{ display:flex; gap:18px; align-items:stretch; width:min(760px, calc(100% - 32px)); }
+#dropZones .drop-card{
+  flex:1 1 0; min-width:0;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:7px;
+  padding:34px 26px; text-align:center;
+  border-color:var(--navy-4); color:var(--muted-2);
+  transition:border-color 80ms linear, color 80ms linear, background 80ms linear;
+}
+#dropZones .drop-card.hot{
+  border-color:var(--accent); color:var(--white); background:rgba(40,64,86,0.95);
+}
+.drop-what{ font-size:11px; letter-spacing:1px; text-transform:uppercase; opacity:0.75; }
+.drop-name{ font-size:14px; overflow-wrap:anywhere; }
+@media (max-width: 560px){
+  #dropZones{ flex-direction:column; }
+  #dropZones .drop-card{ padding:20px; }
 }
 
 #updateBanner{

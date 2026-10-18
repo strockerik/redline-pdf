@@ -32,6 +32,9 @@
       <span id="saveChip" class="save-chip" hidden>
         <span id="dirtyDot" class="dirty-dot" style="display:none"></span>
         <span id="saveChipText"></span>
+        <!-- The tabs you cannot see. Rendered only when another document
+             has unsaved work, and a press goes to the first of them. -->
+        <button type="button" id="saveChipOthers" class="chip-others" hidden></button>
       </span>
     </div>
 
@@ -71,17 +74,6 @@
   </div>
 
   <div id="body">
-    <!-- A save that did not happen stays here until it is dealt with. -->
-    <div id="saveAlert" role="alert">
-      <div class="alert-text">
-        <strong>Nothing was written. Your markups are still open.</strong>
-        <span id="saveAlertWhy"></span>
-      </div>
-      <button id="btnAlertSaveAs">Save As…</button>
-      <button id="btnAlertDownload">Download a copy</button>
-      <button id="btnAlertDismiss" class="icon-only" aria-label="Dismiss" title="Dismiss"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
-    </div>
-
     <aside id="sidebar" aria-label="Pages">
       <div class="sidebar-head">
         <span class="sidebar-title">Pages</span>
@@ -113,6 +105,21 @@
     <div id="drawerScrim"></div>
 
     <div id="editorArea">
+      <!-- A save that did not happen stays here until it is dealt with.
+           Above the tool row and in the flow, not over it: floated, it
+           covered the tool row and the properties row — the controls it
+           tells you to reach for. -->
+      <div id="saveAlert" role="alert">
+        <div class="alert-text">
+          <strong>Nothing was written. Your markups are still open.</strong>
+          <span id="saveAlertWhy"></span>
+        </div>
+        <button id="btnAlertSaveAs">Save As…</button>
+        <button id="btnAlertDownload">Download a copy</button>
+        <button id="btnAlertUnderstood" hidden>Understood</button>
+        <button id="btnAlertDismiss" class="icon-only" aria-label="Dismiss" title="Dismiss"><svg class="ic" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+      </div>
+
       <div id="pageToolbar">
         <div class="grp mobile-only">
           <button id="btnPages" aria-expanded="false" title="Show page thumbnails"><svg class="ic" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><rect x="2.2" y="2.2" width="6.6" height="8.6" rx="1" stroke="currentColor" stroke-width="1.4"></rect><path d="M5.2 11.8h5.6a1 1 0 001-1V5.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="lbl">Pages</span></button>
@@ -217,7 +224,7 @@
              shows an older line than this file does, the installed app is
              still serving a cached copy. tests/analyze.py checks the two
              numbers agree. -->
-        <span id="buildStamp">rev 0.31 · 2026-10-18 · Closed tabs give their memory back; files land in their own tab; locked PDFs are never saved blank</span>
+        <span id="buildStamp">rev 0.33 · 2026-10-18 · A document says whether it can be saved: the chip answers for every tab, locked files and failed saves say so, and a drop asks where it lands. ⌘S finishes the note being typed into, a save belongs to the document it began on, and every merge drops the file ⌘S was aimed at</span>
       </div>
     </div>
 
@@ -284,8 +291,16 @@
 <!-- The hover box for anything with a keyboard shortcut (chrome.js). -->
 <div id="tooltip" role="tooltip" hidden></div>
 
+<!-- Where a dropped PDF goes is the same choice ⌘O and ⇧⌘O make
+     explicitly, so a drop makes it too: which half of the window the file
+     is let go over decides (files.js). An empty document has only one
+     answer, and says so. -->
 <div id="dropOverlay">
-  <div class="drop-card">Drop a PDF to open it</div>
+  <div class="drop-card" id="dropOne">Drop a PDF to open it</div>
+  <div id="dropZones" hidden>
+    <div class="drop-card" id="dropHere"><span class="drop-what">Add to</span><span id="dropHereName" class="drop-name"></span></div>
+    <div class="drop-card" id="dropNewTab"><span class="drop-what">Open in</span><span class="drop-name">a new tab</span></div>
+  </div>
 </div>
 
 <div id="updateBanner">

@@ -337,7 +337,21 @@ error that only shows up on 90°/270° pages and is miserable to eyeball.
   - The browser suite tests the panel against a stand-in Ollama
     (`FakeOllama` in smoke.py), so it needs no model.
 - **A failed save goes to `#saveAlert`, never `setStatus`.** It must stay
-  on screen until dealt with.
+  on screen until dealt with, and it takes a *reason*: for `'locked'` both
+  ways out are dead ends — every write path goes through `buildPdfBytes`,
+  which refuses a locked source — so it offers one button that only says
+  the message was read. Dismissing the banner clears the banner and
+  nothing else.
+- **Whether a document can be saved is the document's, not the chip's.**
+  `locked` and `saveFailed` are per-document fields (state.js), so they
+  survive a tab switch; `locked` travels with the sources through undo
+  (it is in the checkpoint), `saveFailed` does not — it is cleared only by
+  a write that worked. The chip reads them in order: failed, locked,
+  dirty, clean, and it answers for every tab, so it may never say "No
+  unsaved changes" while another document is holding work. A save's
+  outcome is recorded against the document that was saved, through
+  `withDoc` — by the time a long export finishes, another tab may be in
+  front.
 - **A trackpad pinch is a `wheel` event with `ctrlKey` set** and is
   otherwise identical to a real Ctrl+wheel. `installStageGestures` tracks
   whether Ctrl is physically down to tell them apart — needed because

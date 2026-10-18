@@ -13,7 +13,8 @@
  * is painted into the page and is simply part of the drawing from then on.
  */
 import {
-  state, toNative, textCompensationDegrees, hexToRgb01, normRot,
+  state, activeDoc, captureActiveDoc,
+  toNative, textCompensationDegrees, hexToRgb01, normRot,
   computeLeader, computeArrowWings, shapePolylines, isPointShape, POINT_TYPES,
   ANNO_PAD, LINE_HEIGHT_MULT, HIGHLIGHT_OPACITY, SAVE_PACE,
 } from './state.js';
@@ -439,9 +440,23 @@ export function takeMarkups(pdfLibDoc) {
 }
 
 /** Build the output document and return its bytes. Markups are written as
- *  editable annotations unless `flatten` asks for them to be painted in. */
-export async function buildPdfBytes({ flatten = false } = {}) {
-  if (!state.pages.length) throw new Error('Nothing to export yet.');
+ *  editable annotations unless `flatten` asks for them to be painted in.
+ *
+ *  `doc` is the document being written — pinned by the caller before it
+ *  awaited anything. Serialising a drawing set yields every SAVE_PACE
+ *  objects, and a tab switch in one of those pauses swaps `state.pages`
+ *  out from under the loops below: half of one document would be written
+ *  into another's file. So everything this reads of the document is taken
+ *  once, here, before the first await. */
+export async function buildPdfBytes({ flatten = false, doc = activeDoc() } = {}) {
+  // The active document's truth is in `state`, and its record only as
+  // current as the last capture; one that has since been switched away
+  // from has its record, which is then the only place its fields are.
+  // With no tabs at all — the export tests — `state` is the document.
+  const held = doc && doc.id === state.activeDocId ? captureActiveDoc() : doc;
+  const { pages, sources, docName } = held || state;
+
+  if (!pages.length) throw new Error('Nothing to export yet.');
 
   const outDoc = await PDFDocument.create();
   const font = await outDoc.embedFont(StandardFonts.Helvetica);
@@ -456,7 +471,7 @@ export async function buildPdfBytes({ flatten = false } = {}) {
   // appears twice in the output needs two copies — hence the request
   // list holds one entry per *use*, not per unique page.
   const requests = new Map();          // sourceId -> [pageIndex, ...] with repeats
-  for (const page of state.pages) {
+  for (const page of pages) {
     if (page.kind !== 'imported') continue;
     if (!requests.has(page.sourceId)) requests.set(page.sourceId, []);
     requests.get(page.sourceId).push(page.sourcePageIndex);
@@ -469,15 +484,15 @@ export async function buildPdfBytes({ flatten = false } = {}) {
   // them: every sheet blank. Refused here, before anything is written, so
   // ⌘S cannot put that over the drawing it came from.
   for (const sourceId of requests.keys()) {
-    const src = state.sources.find((s) => s.id === sourceId);
+    const src = sources.find((s) => s.id === sourceId);
     if (src && src.pdfLibDoc.isEncrypted) {
-      throw new Error(`${src.name === state.docName ? 'it' : src.name} is locked by its author, and Redline can’t write locked pages without blanking them.`);
+      throw new Error(`${src.name === docName ? 'it' : src.name} is locked by its author, and Redline can’t write locked pages without blanking them.`);
     }
   }
 
   const queues = new Map();            // "sourceId:pageIndex" -> [copied, ...]
   for (const [sourceId, indices] of requests) {
-    const src = state.sources.find((s) => s.id === sourceId);
+    const src = sources.find((s) => s.id === sourceId);
     if (!src) throw new Error(`Missing source file for one of the pages`);
     const copies = await outDoc.copyPages(src.pdfLibDoc, indices);
     indices.forEach((srcIdx, i) => {
@@ -487,13 +502,13 @@ export async function buildPdfBytes({ flatten = false } = {}) {
     });
   }
 
-  for (const page of state.pages) {
+  for (const page of pages) {
     let newPage;
     if (page.kind === 'blank') {
       newPage = outDoc.addPage([page.W0, page.H0]);
     } else {
       const copied = queues.get(`${page.sourceId}:${page.sourcePageIndex}`)?.shift();
-      if (!copied) throw new Error(`Missing source for page ${state.pages.indexOf(page) + 1}`);
+      if (!copied) throw new Error(`Missing source for page ${pages.indexOf(page) + 1}`);
       newPage = outDoc.addPage(copied);
     }
 

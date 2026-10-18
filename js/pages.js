@@ -108,18 +108,37 @@ function land(name, handle, pdfLibDoc, pdfjsDoc, markups, shown) {
   const sourceId = state.nextSourceId++;
   state.sources.push({ id: sourceId, name, pdfLibDoc, pdfjsDoc });
 
-  // Merging a second file means the document no longer corresponds to
-  // any single file on disk. Keeping the first file's handle here is
-  // what used to make ⌘S silently replace *that* file with the merged
-  // result — open A then B, hit save, and A is now A+B. Dropping the
-  // handle sends save() through saveAs(), so the target is chosen
-  // explicitly. Every import path funnels through here, so this covers
-  // the picker, drag-and-drop and the Finder handler alike.
-  const justCombined = state.sources.length > 1 && !state.combined;
-  if (justCombined) {
+  // One encrypted source and the whole document is unsavable: pdf-lib
+  // cannot decrypt, so every page written back would be blank, and
+  // export refuses before a byte of it exists. The document carries that
+  // from here on, so the save chip and the tab can say so rather than
+  // leaving ⌘S to find out, and it travels with the sources through undo
+  // (history.js). Said in words further down, once the import is over.
+  if (pdfLibDoc.isEncrypted) state.locked = true;
+
+  // Merging a file into pages that are already there means the document
+  // no longer corresponds to any single file on disk. Keeping the first
+  // file's handle here is what used to make ⌘S silently replace *that*
+  // file with the merged result — open A then B, hit save, and A is now
+  // A+B. Dropping the handle sends save() through saveAs(), so the target
+  // is chosen explicitly. Every import path funnels through here, so this
+  // covers the picker, drag-and-drop and the Finder handler alike.
+  //
+  // *Every* merge drops it, not only the first. A Save As in between
+  // gives the document a new handle and leaves `combined` set, so the
+  // next merge used to keep that handle — and ⌘S would then overwrite
+  // the file the save panel had just written with a document that has
+  // another file in it now. The name is taken over once only: one the
+  // user chose in the save panel is a better suggestion for the next
+  // save than "Combined.pdf" again.
+  const merged = !opening;
+  const firstMerge = merged && !state.combined;
+  // Whether ⌘S has just lost its target and will ask where instead.
+  const asksWhere = merged && (firstMerge || !!state.fileHandle);
+  if (merged) {
     state.combined = true;
     state.fileHandle = null;
-    state.docName = 'Combined.pdf';
+    if (firstMerge) state.docName = 'Combined.pdf';
     updateTitle();
   }
 
@@ -174,8 +193,13 @@ function land(name, handle, pdfLibDoc, pdfjsDoc, markups, shown) {
     // Shown, but it can never be saved (export.js): better known now than
     // after an hour of markups.
     setStatus(`${name} is locked by its author. Redline can show it, but can’t save it.`, 'err');
-  } else if (justCombined) {
-    setStatus(`${shown ? 'Combined document' : `${name} was added to another tab`} — Save now asks where to put it.`, 'ok');
+  } else if (asksWhere) {
+    // The first merge is the one that renames the document; a later one
+    // only takes away the file ⌘S was aimed at — which is the half that
+    // has to be said either way.
+    const what = !shown ? `${name} was added to another tab`
+      : firstMerge ? 'Combined document' : `${name} added`;
+    setStatus(`${what} — Save now asks where to put it.`, 'ok');
   } else {
     const notes = restored ? `, ${restored} editable markup${restored === 1 ? '' : 's'}` : '';
     setStatus(`${shown ? 'Imported' : 'Opened in its tab:'} ${name} (${count} page${count === 1 ? '' : 's'}${notes})`, 'ok');

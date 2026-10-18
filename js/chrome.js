@@ -23,7 +23,7 @@ import {
 } from './annots.js';
 import { undo, redo, historyStatus } from './history.js';
 import { saveAs, downloadCopy, dismissSaveAlert, canUseFileSystemAccess } from './files.js';
-import { renderTabs } from './tabs.js';
+import { renderTabs, switchToDoc } from './tabs.js';
 import { finderHintSeen, setFinderHintSeen } from './persist.js';
 import { installAiPanel, aiPanelOpened } from './aipanel.js';
 
@@ -76,16 +76,32 @@ function refreshHistory(h) {
 // ============================================================
 // Save state, in words
 // ============================================================
+/** The documents other than this one whose work is only in memory. */
+const otherUnsaved = () =>
+  state.docs.filter((d) => d.id !== state.activeDocId && d.dirty && d.pages.length);
+
 function refreshSaveChip(h) {
   const chip = $('saveChip');
+  const others = otherUnsaved();
   if (!state.pages.length) { show(chip, false); return; }
   show(chip, true);
 
   const at = h.savedAt
     ? new Date(h.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : null;
-  let text;
-  if (state.dirty) {
+
+  // Four states, in this order, because each one makes the next beside
+  // the point: a write that failed, a document no write can ever reach, a
+  // document whose work is only in memory, and one that is on disk.
+  let text, title;
+  if (state.saveFailed) {
+    text = 'NOT SAVED — the last attempt failed';
+    title = 'Nothing was written. The markups are still here, and still only here.';
+  } else if (state.locked) {
+    text = 'Locked by its author — can’t be saved';
+    title = 'This file is encrypted. Redline can show it and mark it up, but every way of '
+      + 'writing it would blank the pages, so none of them will.';
+  } else if (state.dirty) {
     const n = h.changes;
     text = n ? `${n} unsaved change${n === 1 ? '' : 's'}` : 'Unsaved changes';
     if (NO_CLOSE_PROMPT) text += ' · leaving loses them';
@@ -93,14 +109,42 @@ function refreshSaveChip(h) {
     // Only of a document that did not come from a file. One that did has
     // a saved version, even if this session has not written to it.
     else if (state.combined || !state.sources.length) text += ' · never saved';
+    title = 'Documents close with the app. Save before you quit.';
   } else {
-    text = at ? `Saved ${at}` : 'No unsaved changes';
+    // "No unsaved changes" is said of the window, not of this tab, so it
+    // cannot be said while another tab is holding work: with nothing kept
+    // between launches, that is the one sentence this app must never get
+    // wrong. Scoped to the tab instead, and the half below says the rest.
+    text = at ? `Saved ${at}` : (others.length ? 'Nothing unsaved in this tab' : 'No unsaved changes');
+    title = others.length
+      ? 'This document is on disk. Another tab is not.'
+      : 'Everything in this document is on disk.';
   }
-  chip.classList.toggle('unsaved', state.dirty);
   $('saveChipText').textContent = text;
-  chip.title = state.dirty
-    ? 'Documents close with the app. Save before you quit.'
-    : 'Everything in this document is on disk.';
+
+  // The second half counts the tabs you cannot see. It is the only place
+  // the app says that work is waiting somewhere else, so it is also the
+  // way there: a press goes to the first of them. With one document open
+  // there is nothing to say and the header is as it always was.
+  const more = $('saveChipOthers');
+  show(more, others.length > 0);
+  if (others.length) {
+    more.textContent = `· ${others.length} other tab${others.length === 1 ? '' : 's'} unsaved`;
+    more.title = `Go to ${others[0].docName} — ${others.length === 1 ? 'it has' : 'these tabs have'} `
+      + 'unsaved changes too.';
+  }
+
+  chip.classList.toggle('failed', !!state.saveFailed);
+  chip.classList.toggle('locked', !state.saveFailed && !!state.locked);
+  // One warning for the window, not one per document: anything unsaved
+  // anywhere makes the whole chip the loud one.
+  chip.classList.toggle('unsaved', state.dirty || others.length > 0);
+  chip.title = title;
+
+  // Save is the recommended action everywhere except where it cannot
+  // work. A locked document has nothing for it to do.
+  $('btnSave').classList.toggle('primary', !state.locked);
+  $('btnFileMenu').classList.toggle('primary', !state.locked);
 }
 
 // ============================================================
@@ -612,12 +656,19 @@ export function installChrome() {
   installShortcuts();
   installTooltips();
 
-  // The two ways out of a failed save. Where there is no save panel,
-  // Save As *is* a download, so only one of them is offered.
+  // The ways out of a failed save. Which of them are offered is the
+  // failure's to decide — a locked document has none, and gets a button
+  // that only says the message was read (showSaveAlert in files.js).
   $('btnAlertSaveAs').addEventListener('click', saveAs);
   $('btnAlertDownload').addEventListener('click', downloadCopy);
+  $('btnAlertUnderstood').addEventListener('click', dismissSaveAlert);
   $('btnAlertDismiss').addEventListener('click', dismissSaveAlert);
-  show($('btnAlertSaveAs'), canUseFileSystemAccess);
+
+  // Straight to the work that is waiting out of sight.
+  $('saveChipOthers').addEventListener('click', () => {
+    const first = otherUnsaved()[0];
+    if (first) switchToDoc(first.id);
+  });
 
   installPlatformNote();
 

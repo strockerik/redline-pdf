@@ -238,6 +238,12 @@ function wireNoteInteractions(page, a, els) {
     text.classList.toggle('placeholder', text.innerText.trim().length === 0);
     syncFit(a, box);
     updateLeaderVisual(page, a);
+    // The text itself is still only taken on blur, but the document is
+    // unsaved from the first keystroke that changes it. Left to blur, an
+    // edit to a note on a clean document was work the save chip did not
+    // count and beforeunload did not guard — and closing the window while
+    // the caret was still in the box took it with no warning at all.
+    if (!state.dirty && text.innerText.replace(/\n+$/, '') !== (a.text || '')) markDirty();
   });
 
   // ⌘Return finishes the note from the keyboard, without reaching for

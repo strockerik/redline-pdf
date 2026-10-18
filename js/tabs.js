@@ -49,7 +49,10 @@ export function docForNewFile() {
   return openDocument();
 }
 
-function switchToDoc(id) {
+/** Bring a document to the front. Exported because the save chip says
+ *  how many other tabs have unsaved work, and is the way to the first of
+ *  them (chrome.js). */
+export function switchToDoc(id) {
   if (id === state.activeDocId) return;
   const target = state.docs.find((d) => d.id === id);
   if (!target) return;
@@ -114,16 +117,33 @@ export function renderTabs() {
     const name = isActive ? state.docName : doc.docName;
     const dirty = isActive ? state.dirty : doc.dirty;
     const count = isActive ? state.pages.length : doc.pages.length;
+    const locked = isActive ? state.locked : doc.locked;
 
     const tab = document.createElement('div');
-    tab.className = 'tab' + (isActive ? ' active' : '');
+    // A tab is the only sign a document that is not on screen gives, so
+    // it carries the two things that cannot wait for a switch: work only
+    // in memory, and a file that can never be written.
+    tab.className = 'tab' + (isActive ? ' active' : '')
+      + (dirty && count ? ' dirty' : '') + (locked ? ' locked' : '');
     tab.dataset.docId = String(doc.id);
-    tab.title = `${name} — ${count} page${count === 1 ? '' : 's'}`;
+    tab.title = `${name} — ${count} page${count === 1 ? '' : 's'}`
+      + (dirty && count ? ' · unsaved changes' : '')
+      + (locked ? ' · locked by its author, and can’t be saved' : '');
 
     if (dirty && count) {
       const dot = document.createElement('span');
       dot.className = 'tab-dot';
       tab.appendChild(dot);
+    }
+
+    if (locked) {
+      const lock = document.createElement('span');
+      lock.className = 'tab-lock';
+      lock.setAttribute('aria-hidden', 'true');
+      lock.innerHTML = '<svg width="9" height="11" viewBox="0 0 9 11" fill="none">'
+        + '<rect x="0.9" y="4.4" width="7.2" height="6.2" rx="1.2" stroke="currentColor" stroke-width="1.2"></rect>'
+        + '<path d="M2.6 4.4V3.1a1.9 1.9 0 013.8 0v1.3" stroke="currentColor" stroke-width="1.2"></path></svg>';
+      tab.appendChild(lock);
     }
 
     const label = document.createElement('span');
@@ -157,7 +177,8 @@ export function refreshActiveTab() {
   if (label && label.textContent !== state.docName) label.textContent = state.docName;
   const hasDot = !!el.querySelector('.tab-dot');
   const wantDot = state.dirty && state.pages.length > 0;
-  if (hasDot !== wantDot) renderTabs();
+  const hasLock = !!el.querySelector('.tab-lock');
+  if (hasDot !== wantDot || hasLock !== !!state.locked) renderTabs();
 }
 
 export function installTabs() {

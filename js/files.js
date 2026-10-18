@@ -6,7 +6,10 @@
  * <input type=file> / download path on iOS, which implements neither
  * the File System Access API nor file handlers.
  */
-import { state, setStatus, markDirty, activeDoc } from './state.js';
+import {
+  state, setStatus, markDirty, finishTyping,
+  activeDoc, withDoc, captureActiveDoc,
+} from './state.js';
 import { noteClean } from './history.js';
 import { setFinderHintSeen } from './persist.js';
 import { importPdfBytes, importPdfFile } from './pages.js';
@@ -155,35 +158,76 @@ export async function openViaPicker() {
  *  needs no permissions, so it's the most reliable path in practice. */
 export function installDragAndDrop() {
   const overlay = document.getElementById('dropOverlay');
+  const zones = document.getElementById('dropZones');
+  const one = document.getElementById('dropOne');
+  const here = document.getElementById('dropHere');
+  const newTab = document.getElementById('dropNewTab');
   let depth = 0;
 
   const isFileDrag = (e) =>
     e.dataTransfer && [...e.dataTransfer.types].includes('Files');
 
+  // What the drop can mean, decided as the overlay appears. ⌘O and ⇧⌘O
+  // are the same two answers, asked outright; a drop used to take the
+  // first of them without ever saying so. An empty document has only one
+  // answer, so it keeps the message it always had.
+  const arm = () => {
+    const open = state.pages.length > 0;
+    zones.hidden = !open;
+    one.hidden = open;
+    if (open) document.getElementById('dropHereName').textContent = state.docName;
+  };
+
+  /** Which answer a point is over. Half the overlay each, rather than the
+   *  cards themselves: a file let go in the gap between two cards still
+   *  has to land somewhere. */
+  const zoneFor = (x, y) => {
+    if (zones.hidden) return 'merge';
+    const a = here.getBoundingClientRect(), b = newTab.getBoundingClientRect();
+    // Side by side on a wide window, stacked on a narrow one.
+    return b.top >= a.bottom
+      ? (y > (a.bottom + b.top) / 2 ? 'tabs' : 'merge')
+      : (x > (a.right + b.left) / 2 ? 'tabs' : 'merge');
+  };
+
+  const mark = (zone) => {
+    here.classList.toggle('hot', zone === 'merge');
+    newTab.classList.toggle('hot', zone === 'tabs');
+  };
+
+  const putAway = () => {
+    depth = 0;
+    overlay.classList.remove('show');
+    mark(null);
+  };
+
   window.addEventListener('dragenter', (e) => {
     if (!isFileDrag(e)) return;
     e.preventDefault();
-    if (++depth === 1) overlay.classList.add('show');
+    if (++depth === 1) { arm(); overlay.classList.add('show'); }
   });
   window.addEventListener('dragover', (e) => {
     if (!isFileDrag(e)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
+    mark(zoneFor(e.clientX, e.clientY));
   });
   window.addEventListener('dragleave', (e) => {
     if (!isFileDrag(e)) return;
-    if (--depth <= 0) { depth = 0; overlay.classList.remove('show'); }
+    if (--depth <= 0) putAway();
   });
   window.addEventListener('drop', async (e) => {
     if (!isFileDrag(e)) return;
     e.preventDefault();
-    depth = 0;
-    overlay.classList.remove('show');
+    const zone = zoneFor(e.clientX, e.clientY);
+    putAway();
 
     const files = [...e.dataTransfer.files];
     const isPdf = (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
     if (!files.some(isPdf)) { setStatus('Only PDF files can be opened.', 'err'); return; }
-    // Every file of one drop goes to the document it was dropped on.
+    // Every file of one drop goes where the drop said, and the document
+    // it was dropped on is taken now — before the first await, like every
+    // other way in.
     const into = activeDoc();
 
     // Prefer handles when the browser offers them, so a dragged-in file
@@ -196,11 +240,17 @@ export function installDragAndDrop() {
       ? fileItems.map((item) => item.getAsFileSystemHandle().catch(() => null))
       : [];
 
+    const entries = [];
     for (let i = 0; i < files.length; i++) {
       if (!isPdf(files[i])) continue;
       const handle = await handles[i];
-      if (handle && handle.kind === 'file') await openFromHandle(handle, { into });
-      else await importPdfFile(files[i], { into });
+      entries.push(handle && handle.kind === 'file' ? { handle } : { file: files[i] });
+    }
+
+    if (zone === 'tabs') { await openInTabs(entries); return; }
+    for (const entry of entries) {
+      if (entry.handle) await openFromHandle(entry.handle, { into });
+      else await importPdfFile(entry.file, { into });
     }
   });
 }
@@ -250,53 +300,159 @@ async function writeToHandle(handle, bytes) {
 
 // A save that did not happen is the one message that must not fade. It
 // stays until it is dismissed or a save succeeds, says that the work is
-// still here, and offers the two ways out (wired in chrome.js).
-function saveFailed(what) {
+// still here, and offers the ways out that actually lead anywhere.
+//
+// `reason` says which failure this is, because that decides what to
+// offer. Every write path goes through buildPdfBytes, which refuses a
+// locked source before a byte exists — flatten included — so for 'locked'
+// both Save As and Download a copy are dead ends and there is nothing to
+// offer but having read it. A revoked handle or a read-only folder is the
+// other kind: another name or another folder is exactly the way out.
+function showSaveAlert(what, reason) {
   setStatus('');
   const alert = document.getElementById('saveAlert');
   if (!alert) { setStatus(what, 'err'); return; }
   document.getElementById('saveAlertWhy').textContent = what;
+  alert.dataset.reason = reason || '';
+  const dead = reason === 'locked';
+  const offer = (id, on) => { const el = document.getElementById(id); if (el) el.hidden = !on; };
+  offer('btnAlertSaveAs', !dead && canUseFileSystemAccess);
+  offer('btnAlertDownload', !dead);
+  offer('btnAlertUnderstood', dead);
   alert.classList.add('show');
+  // It sits in the flow above the tool row now, so the stage is that much
+  // shorter than it was: a fit mode has to be given the new height.
+  renderMainCanvas();
 }
 
+/** Dismissing the banner takes away the banner and nothing else. The
+ *  document's `saveFailed` state outlives it — that is the whole point of
+ *  the chip — and is cleared only by a write that works. */
 export function dismissSaveAlert() {
-  document.getElementById('saveAlert')?.classList.remove('show');
+  const alert = document.getElementById('saveAlert');
+  if (!alert || !alert.classList.contains('show')) return;
+  alert.classList.remove('show');
+  renderMainCanvas();
 }
 
-/** The document on screen is now exactly what is on disk. */
-function saved() {
+/** A pinned document's own fields, read without disturbing the one on
+ *  screen. The active document's truth is in `state` and its record only
+ *  as current as the last capture; a document that has since been
+ *  switched away from has its record, which is then the only place its
+ *  fields are. With no tabs at all, `state` is the document. */
+function fieldsOf(doc) {
+  if (!doc) return state;
+  return doc.id === state.activeDocId ? (captureActiveDoc() || state) : doc;
+}
+
+/** Run `fn` on `doc`, wherever it is, and leave its record agreeing with
+ *  it afterwards. A document that is not on screen is swapped in for the
+ *  call (withDoc); for the one that is, `state` is already the truth and
+ *  its record is brought up to date so that nothing later reads a copy
+ *  from before the save. */
+function onDoc(doc, fn) {
+  if (!doc) return fn();
+  const out = withDoc(doc, fn);
+  if (doc.id === state.activeDocId) captureActiveDoc();
+  return out;
+}
+
+/** Where `doc` saves to from now on. Writing it to `state` would land on
+ *  whichever tab is in front — and be overwritten by the next capture
+ *  anyway — so it goes to the document that was actually saved. */
+function aimAt(doc, { name, handle }) {
+  onDoc(doc, () => {
+    state.docName = name;
+    if (handle !== undefined) state.fileHandle = handle;
+  });
+}
+
+/** Say how the attempt to write `doc` ended.
+ *
+ *  The outcome belongs to the document that was saved, which may no
+ *  longer be the one on screen — only the active document's fields live
+ *  on `state` (state.js), so writing the record of an inactive one would
+ *  be overwritten by the next capture. withDoc puts it where it will be
+ *  read either way.
+ */
+function noteSaveFailed(doc, failed) {
+  if (!doc) return;
+  onDoc(doc, () => { state.saveFailed = failed; });
+  // The chip and the tabs are drawn from this; chrome.js redraws on any
+  // change to the save state, which is what markDirty's listeners are
+  // (state.js). The value is left exactly as it was.
+  renderTabs();
+  markDirty(state.dirty);
+}
+
+/** The document that was written is now exactly what is on disk. Not
+ *  necessarily the one on screen: a long export finishes whenever it
+ *  finishes, and marking the active tab clean would call another
+ *  document's unsaved work saved. */
+function saved(doc) {
   dismissSaveAlert();
-  noteClean({ saved: true });
-  markDirty(false);
+  onDoc(doc, () => { noteClean({ saved: true }); markDirty(false); });
+  // Last, and against the active document: this redraws the chip and the
+  // tabs from what is on screen now, over anything the line above drew
+  // while another document was swapped in.
+  noteSaveFailed(doc, false);
   updateTitle();
+  renderTabs();            // the dot and the lock on this document's tab
 }
 
 /** ⌘S — overwrite the file we opened, or fall through to Save As. */
 export async function save() {
+  // A note being typed into has its text taken on blur and nowhere else,
+  // and ⌘S runs straight off the keydown (main.js) — with a handle
+  // already granted, nothing here takes the focus away. Without this the
+  // text written is the text from before the edit, and `saved()` then
+  // calls the document clean, after which beforeunload no longer warns.
+  // Before the pages check, because finishing a note that was placed and
+  // left empty takes it away again.
+  finishTyping();
   if (!state.pages.length) { setStatus('Nothing to save yet.', 'err'); return; }
   if (!state.fileHandle) return saveAs();
+  // Which document this save is of, and what it writes where, all taken
+  // before the first await: the export yields (export.js), so by the time
+  // it finishes another tab may be in front, and reading `state` then
+  // would serialise one document into another's file and record the
+  // outcome against the wrong one.
+  const doc = activeDoc();
+  const handle = state.fileHandle;
+  const name = state.docName;
 
   setStatus('Saving…');
   try {
     // Permission must be requested while the user gesture is still
     // live, so it happens before the (slower) export.
-    if (!await ensureWritePermission(state.fileHandle)) {
-      saveFailed(`Permission to write ${state.docName} was declined.`);
+    if (!await ensureWritePermission(handle)) {
+      // Declined, not failed: nothing about the file says it cannot be
+      // written, and the chip goes on counting the unsaved work.
+      showSaveAlert(`Permission to write ${name} was declined.`, 'permission');
       return;
     }
-    const bytes = await buildPdfBytes();
-    await writeToHandle(state.fileHandle, bytes);
-    saved();
-    setStatus(`Saved ${state.docName} ✓`, 'ok');
+    const bytes = await buildPdfBytes({ doc });
+    await writeToHandle(handle, bytes);
+    saved(doc);
+    setStatus(`Saved ${name} ✓`, 'ok');
   } catch (err) {
     console.error(err);
-    saveFailed(`Couldn’t save ${state.docName}: ${err.message || err}`);
+    // A locked document is not a save that went wrong; it is one that can
+    // never go right. It says so in the chip already, so the failure is
+    // not also recorded over it.
+    if (fieldsOf(doc).locked) showSaveAlert(`${name} can’t be saved: ${err.message || err}`, 'locked');
+    else {
+      noteSaveFailed(doc, true);
+      showSaveAlert(`Couldn’t save ${name}: ${err.message || err}`, 'write');
+    }
   }
 }
 
 /** ⇧⌘S — native save panel, then remember the handle for later ⌘S. */
 export async function saveAs() {
+  finishTyping();                 // the note on screen, not the one before it
   if (!state.pages.length) { setStatus('Nothing to save yet.', 'err'); return; }
+  const doc = activeDoc();
 
   // The save panel is where a name is chosen; it starts from the
   // document's own.
@@ -305,14 +461,14 @@ export async function saveAs() {
   if (!canUseFileSystemAccess) {
     setStatus('Building PDF…');
     try {
-      const bytes = await buildPdfBytes();
+      const bytes = await buildPdfBytes({ doc });
       downloadBytes(bytes, suggested);
-      state.docName = suggested;
-      saved();
+      aimAt(doc, { name: suggested });
+      saved(doc);
       setStatus('Downloaded ✓', 'ok');
     } catch (err) {
       console.error(err);
-      saveFailed(`Couldn’t build the PDF: ${err.message || err}`);
+      failedToBuild(doc, `Couldn’t build the PDF: ${err.message || err}`);
     }
     return;
   }
@@ -323,17 +479,28 @@ export async function saveAs() {
       types: PDF_PICKER_TYPES,
     });
     setStatus('Saving…');
-    const bytes = await buildPdfBytes();
+    const bytes = await buildPdfBytes({ doc });
     await writeToHandle(handle, bytes);
-    state.fileHandle = handle;
-    state.docName = handle.name || suggested;
-    saved();
-    setStatus(`Saved ${state.docName} ✓`, 'ok');
+    const name = handle.name || suggested;
+    aimAt(doc, { name, handle });
+    saved(doc);
+    setStatus(`Saved ${name} ✓`, 'ok');
   } catch (err) {
     if (err.name === 'AbortError') { setStatus(''); return; }   // user dismissed the panel
     console.error(err);
-    saveFailed(`Couldn’t save: ${err.message || err}`);
+    failedToBuild(doc, `Couldn’t save: ${err.message || err}`);
   }
+}
+
+/** A write that never reached a file, from any of the three paths that
+ *  build the bytes themselves. Same two kinds as ⌘S: a locked document
+ *  cannot be written by any of them, anything else can be written
+ *  somewhere else. */
+function failedToBuild(doc, what) {
+  const d = fieldsOf(doc);
+  if (d.locked) { showSaveAlert(`${d.docName} can’t be saved: it is locked by its author.`, 'locked'); return; }
+  noteSaveFailed(doc, true);
+  showSaveAlert(what, 'write');
 }
 
 /** Save a copy with the markups painted into the pages. In that copy they
@@ -342,7 +509,9 @@ export async function saveAs() {
  *  markups, its name and its save target — so flattening is never the thing
  *  that loses the editable version. */
 export async function saveFlattenedCopy() {
+  finishTyping();
   if (!state.pages.length) { setStatus('Nothing to flatten yet.', 'err'); return; }
+  const doc = activeDoc();
   // Named after the document, so the two sit together.
   const name = ensurePdfExt(state.docName);
   const suggested = `${name.replace(/\.pdf$/i, '')} - flattened.pdf`;
@@ -350,11 +519,12 @@ export async function saveFlattenedCopy() {
   if (!canUseFileSystemAccess) {
     setStatus('Building PDF…');
     try {
-      downloadBytes(await buildPdfBytes({ flatten: true }), suggested);
+      downloadBytes(await buildPdfBytes({ flatten: true, doc }), suggested);
+      noteSaveFailed(doc, false);
       setStatus('Downloaded a flattened copy ✓', 'ok');
     } catch (err) {
       console.error(err);
-      saveFailed(`Couldn’t build the flattened copy: ${err.message || err}`);
+      failedToBuild(doc, `Couldn’t build the flattened copy: ${err.message || err}`);
     }
     return;
   }
@@ -362,26 +532,35 @@ export async function saveFlattenedCopy() {
   try {
     const handle = await window.showSaveFilePicker({ suggestedName: suggested, types: PDF_PICKER_TYPES });
     setStatus('Saving…');
-    await writeToHandle(handle, await buildPdfBytes({ flatten: true }));
+    await writeToHandle(handle, await buildPdfBytes({ flatten: true, doc }));
+    noteSaveFailed(doc, false);
+    dismissSaveAlert();
     setStatus(`Saved a flattened copy as ${handle.name || suggested} ✓`, 'ok');
   } catch (err) {
     if (err.name === 'AbortError') { setStatus(''); return; }   // user dismissed the panel
     console.error(err);
-    saveFailed(`Couldn’t save the flattened copy: ${err.message || err}`);
+    failedToBuild(doc, `Couldn’t save the flattened copy: ${err.message || err}`);
   }
 }
 
 /** Always-download path, kept as an explicit action so the behaviour is
  *  available even where the File System Access API exists. */
 export async function downloadCopy() {
+  finishTyping();
   if (!state.pages.length) { setStatus('Nothing to export yet.', 'err'); return; }
+  const doc = activeDoc();
+  const name = ensurePdfExt(state.docName);
   setStatus('Building PDF…');
   try {
-    const bytes = await buildPdfBytes();
-    downloadBytes(bytes, ensurePdfExt(state.docName));
+    const bytes = await buildPdfBytes({ doc });
+    downloadBytes(bytes, name);
+    // One of the two ways out of a failed save, so it has to be a way
+    // out: the work is on disk, even if not in the file ⌘S aims at.
+    noteSaveFailed(doc, false);
+    dismissSaveAlert();
     setStatus('Downloaded a copy ✓', 'ok');
   } catch (err) {
     console.error(err);
-    saveFailed(`Couldn’t build the PDF: ${err.message || err}`);
+    failedToBuild(doc, `Couldn’t build the PDF: ${err.message || err}`);
   }
 }
