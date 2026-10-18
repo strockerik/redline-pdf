@@ -1,5 +1,5 @@
 /* Bootstrap: wire the DOM to the modules and boot the app. */
-import { state, setStatus, onDirtyChange } from './state.js';
+import { state, setStatus, onDirtyChange, activeDoc } from './state.js';
 import {
   renderThumbnails, renderMainCanvas, updateToolbarState, updateTitle,
   installStageGestures, installThumbReorder,
@@ -181,7 +181,8 @@ function wireUi() {
     if (takeInputMode() === 'tabs') {
       await openInTabs(files.map((file) => ({ file })));
     } else {
-      for (const f of files) await importPdfFile(f);
+      const into = activeDoc();
+      for (const f of files) await importPdfFile(f, { into });
     }
   });
 

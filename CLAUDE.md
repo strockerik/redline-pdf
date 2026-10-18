@@ -135,6 +135,20 @@ Finder reaches the launch handler while boot is still running. The handler
 awaits `booted` (main.js) and opens each file in its own tab — never into
 whatever document happens to be live.
 
+**A file lands in the document it was opened into.** Reading a drawing
+set takes seconds, and the user may change tabs meanwhile. Every open
+path takes the target document when it *begins* and passes it to
+`importPdfBytes` as `into`; a file that finishes while another tab is in
+front lands there out of sight (`withDoc` in state.js, which must not
+await), and one whose tab was closed lands nowhere. This is the one place
+pages.js knows about tabs (`renderTabs` after an out-of-sight landing).
+
+**A file locked by its author is shown but never saved.** pdf-lib reads
+an encrypted PDF without decrypting it; written back, every page would be
+blank. `buildPdfBytes` refuses any locked source before a byte is written.
+Opening and saving such files properly needs real decryption (RC4 and AES,
+before pdf-lib parses) — not started.
+
 ## The part that breaks if you're careless
 
 Annotation coordinates live in **visual space** (what the user sees:
@@ -180,6 +194,13 @@ error that only shows up on 90°/270° pages and is miserable to eyeball.
   production.
 - **Render thumbnails sequentially.** Concurrent pdf.js renders are
   flaky; `paintAllThumbs` awaits in a loop on purpose.
+- **pdf.js keeps every page it has drawn until told to let go** — the
+  page's whole operator list. Only the page on screen keeps its own
+  (`keepOnly` / `letGo` in view.js); a thumbnail or a page drawn ahead
+  lets go as soon as its pixels exist. Leaving them cost 29 MB per
+  60-sheet set. And a closed tab's pdf.js documents are destroyed by
+  `sweepSources` once no open document and no undo step can reach them;
+  a new path that holds a source somewhere else must teach it that place.
 - **`renderMainCanvas` cancels the previous RenderTask** and guards with
   a token. pdf.js rejects two renders against one canvas.
 - **Heavy pages never go through the ordinary render path.** A CAD plot

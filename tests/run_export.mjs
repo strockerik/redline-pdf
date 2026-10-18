@@ -150,6 +150,27 @@ try {
   check('missing source throws', /Missing source/.test(e.message), e.message);
 }
 
+// --- 7b. A locked file is refused, not written with its pages blanked ---
+{
+  const locked = await PDFDocument.create();
+  locked.addPage([612, 792]);
+  // An /Encrypt entry is all pdf-lib looks at; the content need not be.
+  locked.context.trailerInfo.Encrypt = locked.context.register(locked.context.obj({ Filter: 'Standard', V: 1, R: 2, P: -3904 }));
+  const lockedDoc = await PDFDocument.load(await locked.save(), { ignoreEncryption: true });
+  check('the fixture reads as locked', lockedDoc.isEncrypted === true);
+  S.sources.push({ id: 7, name: 'locked.pdf', pdfLibDoc: lockedDoc, pdfjsDoc: null });
+  S.pages = [{ id: 1, kind: 'imported', sourceId: 7, sourcePageIndex: 0, W0: 612, H0: 792, rotation: 0, annotations: [] }];
+  for (const flatten of [false, true]) {
+    try {
+      await buildPdfBytes({ flatten });
+      check(`a locked source is refused${flatten ? ' when flattening too' : ''}`, false, 'it was written');
+    } catch (e) {
+      check(`a locked source is refused${flatten ? ' when flattening too' : ''}`, /locked/.test(e.message), e.message);
+    }
+  }
+  S.sources.pop();
+}
+
 // ============================================================
 // Markups that stay editable
 // ============================================================

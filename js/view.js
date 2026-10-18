@@ -6,6 +6,7 @@ import {
   THUMB_WIDTH, PT_TO_PX, ZOOM_STEPS, MIN_ZOOM, MAX_ZOOM,
 } from './state.js';
 import { renderAnnotationLayer } from './annots.js';
+import { sourcesHeld } from './history.js';
 import {
   plotAvailable, plotRecord, startPlot, drawPlot, plotBitmap, plotRoom,
   pageMatrix, setShownPlot, sweepPlots, onPlotEvent,
@@ -678,6 +679,13 @@ export function renderMainCanvas(opts = {}) {
     shown = null;
     held = null;
     hidePlot();
+    // Nothing on screen, so nothing either side of it worth keeping: the
+    // copies drawn ahead are canvases, up to ~96 MB each, and the last
+    // tab closing must not leave them behind.
+    stopAhead();
+    for (const hit of ahead.values()) hit.canvas.width = hit.canvas.height = 0;
+    ahead.clear();
+    keepOnly(null);
     emptyState.style.display = 'block';
     pageStack.style.display = 'none';
     return Promise.resolve();
@@ -726,6 +734,28 @@ const settle = (ms) => new Promise((resolve) => {
   // The next render does not wait this one's pause out.
   wakeSettle = () => { clearTimeout(timer); resolve(); };
 });
+
+// ---- What pdf.js keeps of a page it has drawn ----
+//
+// After drawing a page pdf.js keeps its operator list — the whole page,
+// parsed into drawing commands — until told to let go, so a redraw need
+// not parse it again. Every thumbnail is a draw: eight 60-sheet sets held
+// 211 MB of commands for pages nobody was looking at, more than nine
+// tenths of all the memory they took. Only the page on screen keeps its
+// own, which is the one a zoom redraws.
+let keptPage = null;         // the pdf.js page whose operator list is kept
+
+function keepOnly(pjPage) {
+  if (keptPage && keptPage !== pjPage) letGo(keptPage, true);
+  keptPage = pjPage;
+}
+
+/** Let pdf.js drop what it holds for a page. Mid-render it waits for the
+ *  render to finish; a render started later cancels the request. */
+function letGo(pjPage, evenKept = false) {
+  if (!pjPage || (pjPage === keptPage && !evenKept)) return;
+  try { pjPage.cleanup(); } catch { /* its document has gone */ }
+}
 
 // ---- The pages either side, drawn ahead ----
 //
@@ -817,6 +847,8 @@ async function drawAhead(from, run) {
       return;
     } finally {
       aheadTask = null;
+      // The copy is what is kept; stepping to it draws nothing.
+      letGo(pjPage);
     }
     if (run !== aheadRun) { canvas.width = canvas.height = 0; return; }
     if (have) have.canvas.width = have.canvas.height = 0;
@@ -917,6 +949,7 @@ async function paintPage(page, token, opts, resizing) {
   shown = heavy && !plot ? { rec: heavy, rotation: page.rotation } : null;
   setRenderingBadge(false);
   if (!plot) hidePlot();
+  if (page.kind === 'blank' || heavy) keepOnly(null);
 
   if (page.kind === 'blank') {
     canvas.width = Math.round(Wv * backing);
@@ -965,12 +998,14 @@ async function paintPage(page, token, opts, resizing) {
       ctx.drawImage(early, 0, 0);
       early.width = early.height = 0;
       held = { page, rotation: page.rotation, backing };
+      keepOnly(null);
       drawAheadSoon(page);
       return;
     }
     const src = state.sources.find((s) => s.id === page.sourceId);
     const pjPage = await src.pdfjsDoc.getPage(page.sourcePageIndex + 1);
     if (token !== renderToken) return;
+    keepOnly(pjPage);
     // rotation here is absolute — it overrides the page's own /Rotate
     const viewport = pjPage.getViewport({ scale: backing, rotation: normRot(page.rotation) });
     const target = resizing ? document.createElement('canvas') : canvas;
@@ -982,7 +1017,7 @@ async function paintPage(page, token, opts, resizing) {
       await task.promise;
     } catch (err) {
       if (target !== canvas) target.width = target.height = 0;      // give the memory back now
-      if (err && err.name === 'RenderingCancelledException') return;
+      if (token !== renderToken || (err && err.name === 'RenderingCancelledException')) return;
       // Loud, but not fatal: one failed render must not reject the promise
       // every caller ignores, and must not stop the queue.
       console.error('page render failed', err);
@@ -1345,7 +1380,13 @@ async function paintThumbCanvas(page) {
       const viewport = pjPage.getViewport({ scale: scale * dpr, rotation: normRot(page.rotation) });
       canvas.width = Math.round(viewport.width);
       canvas.height = Math.round(viewport.height);
-      await pjPage.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+      try {
+        await pjPage.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+      } finally {
+        // Unless the page is also the one on screen, about to be drawn
+        // there: then it is worth keeping.
+        if (page.id !== state.selectedPageId) letGo(pjPage);
+      }
     }
   }
   thumbCache.set(page, { rotation: page.rotation, canvas });
@@ -1371,6 +1412,8 @@ async function paintAllThumbs(generation) {
       if (generation !== paintGeneration) return;
       holder.replaceChildren(canvas);
     } catch (err) {
+      // Superseded, it may simply be a closed document's page.
+      if (generation !== paintGeneration) return;
       console.error('thumbnail render failed', err);
     }
   }
@@ -1447,9 +1490,35 @@ export function renderThumbnails() {
   paintAllThumbs(++paintGeneration);
 
   // Every change to what is open comes through here, which makes it the
-  // place to give back the GPU memory of documents that have closed.
-  sweepPlots((src) => state.sources.includes(src)
-    || state.docs.some((d) => d.id !== state.activeDocId && d.sources.includes(src)));
+  // place to give back the memory of documents that have closed.
+  sweepSources();
+}
+
+// Every source seen open, so that one that is no longer can be found.
+const knownSources = new Set();
+
+/** Give back what closed documents hold. A source only an undo or a redo
+ *  could bring back loses its GPU plots, which are rebuilt if it returns;
+ *  one nothing can bring back loses its pdf.js document too. pdf.js keeps
+ *  a document — and every operator list it has made for it — until told,
+ *  and a tab closed without telling it kept all of it: 218 MB after
+ *  closing eight 60-sheet sets. Run on every redraw of the rail, and by
+ *  an import that lands out of sight, so that every source is seen open
+ *  at least once. */
+export function sweepSources() {
+  const open = new Set(state.sources);
+  for (const d of state.docs) if (d.id !== state.activeDocId) d.sources.forEach((s) => open.add(s));
+  sweepPlots((src) => open.has(src));
+
+  const reachable = new Set(open);
+  for (const d of state.docs) sourcesHeld(d).forEach((s) => reachable.add(s));
+  for (const src of reachable) knownSources.add(src);
+  for (const src of knownSources) {
+    if (reachable.has(src)) continue;
+    knownSources.delete(src);
+    if (heavyJob && heavyJob.rec.src === src) cancelHeavyJob();
+    src.pdfjsDoc?.destroy().catch(() => { /* gone already */ });
+  }
 }
 
 export function updateThumbSelection() {

@@ -1,12 +1,13 @@
 /* Page assembly: import, blank pages, delete, rotate, reorder. */
 import {
-  state, normRot, toNative, toVisual, estimateBoxHeight, isPointShape,
+  state, normRot, toNative, toVisual, estimateBoxHeight, isPointShape, activeDoc, withDoc,
   setStatus, markDirty, resetDocument, finishTyping, BLANK_SIZES, MOD_KEY, SAVE_PACE,
 } from './state.js';
 import {
   renderThumbnails, renderMainCanvas, updateThumbSelection,
-  invalidateThumb, invalidateAllThumbs, updateTitle,
+  invalidateThumb, invalidateAllThumbs, updateTitle, updateToolbarState, sweepSources,
 } from './view.js';
+import { renderTabs } from './tabs.js';
 import { takeMarkups } from './export.js';
 import { checkpoint, startFresh } from './history.js';
 
@@ -35,7 +36,14 @@ function pdfWorker() {
  *  Landing among pages that are already there, it is an edit — one that
  *  can be undone — and no handle is adopted, because the result is not
  *  that file any more. */
-export async function importPdfBytes(bytes, name, { handle = null } = {}) {
+export async function importPdfBytes(bytes, name, { handle = null, into = activeDoc() } = {}) {
+  // `into` is the document the file was opened into. Reading and parsing
+  // a drawing set takes seconds, time enough to turn to another tab; the
+  // file still belongs where it was asked for, not in whichever document
+  // is on screen when it arrives — which used to merge it into that one.
+  // A caller that waits before getting here (for the file's bytes) passes
+  // the document it had when it began.
+  let reading = true;
   try {
     // pdf-lib keeps views into the buffer it parsed; pdf.js transfers (and
     // detaches) the one it is handed. So they can never share one.
@@ -44,6 +52,9 @@ export async function importPdfBytes(bytes, name, { handle = null } = {}) {
     // a few thousand objects spent most of its open time waiting. Reading
     // a file is quick work; let it run straight through.
     const pdfLibDoc = await PDFDocument.load(bytes, { ignoreEncryption: true, parseSpeed: ParseSpeeds.Fastest });
+    // A file with a PDF header and no document behind it gets this far;
+    // asking for its pages is what finds out.
+    pdfLibDoc.getPageCount();
 
     // Markups Redline saved earlier come back as markups. They are taken
     // out of the document first, so pdf.js has to be given the document as
@@ -54,90 +65,127 @@ export async function importPdfBytes(bytes, name, { handle = null } = {}) {
       ? await pdfLibDoc.save({ useObjectStreams: false, updateFieldAppearances: false, objectsPerTick: SAVE_PACE })
       : bytes.slice(0);
     const pdfjsDoc = await pdfjsLib.getDocument({ data: forPdfjs, worker: pdfWorker() }).promise;
+    reading = false;
 
-    // Decided here, after the slow part: only now is it known what the
-    // file is landing in.
-    const opening = !state.pages.length && !state.sources.length;
-    if (!opening) checkpoint(`Add ${name}`);
-
-    const sourceId = state.nextSourceId++;
-    state.sources.push({ id: sourceId, name, pdfLibDoc, pdfjsDoc });
-
-    // Merging a second file means the document no longer corresponds to
-    // any single file on disk. Keeping the first file's handle here is
-    // what used to make ⌘S silently replace *that* file with the merged
-    // result — open A then B, hit save, and A is now A+B. Dropping the
-    // handle sends save() through saveAs(), so the target is chosen
-    // explicitly. Every import path funnels through here, so this covers
-    // the picker, drag-and-drop and the Finder handler alike.
-    const justCombined = state.sources.length > 1 && !state.combined;
-    if (justCombined) {
-      state.combined = true;
-      state.fileHandle = null;
-      state.docName = 'Combined.pdf';
-      updateTitle();
+    if (into && !state.docs.includes(into)) {
+      pdfjsDoc.destroy().catch(() => { /* gone already */ });
+      setStatus(`${name} was not opened: its tab was closed while it loaded.`);
+      return null;
     }
-
-    const count = pdfLibDoc.getPageCount();
-    let firstNew = null;
-    let restored = 0;
-    for (let i = 0; i < count; i++) {
-      const p = pdfLibDoc.getPage(i);
-      const size = p.getSize();   // raw MediaBox — not rotation-adjusted
-      const page = {
-        id: state.nextPageId++,
-        kind: 'imported',
-        sourceId,
-        sourcePageIndex: i,
-        W0: size.width,
-        H0: size.height,
-        rotation: normRot(p.getRotation().angle),
-        annotations: [],
-      };
-      for (const { markup, R } of markups.get(i) || []) {
-        page.annotations.push({ id: state.nextAnnoId++, ...markup });
-        // Saved against one rotation, opened at another: something else
-        // has turned the page since. Carry the markup round with it.
-        if (R !== page.rotation) {
-          remapAnnotationsForRotation({ annotations: [page.annotations.at(-1)], W0: page.W0, H0: page.H0 }, R, page.rotation);
-        }
-        restored++;
-      }
-      state.pages.push(page);
-      if (firstNew === null) firstNew = page.id;
-    }
-
-    if (opening) {
-      state.docName = name;
-      state.fileHandle = handle;
-      startFresh();
-      // Opening a file is not a change to it.
-      markDirty(false);
-      updateTitle();
-    } else {
-      markDirty();
-    }
-    renderThumbnails();
-    if (!state.selectedPageId) selectPage(firstNew);
-    // After the import message, not before — otherwise it is overwritten
-    // in the same tick and the user never sees why Save changed.
-    if (justCombined) {
-      setStatus('Combined document — Save now asks where to put it.', 'ok');
-    } else {
-      const notes = restored ? `, ${restored} editable markup${restored === 1 ? '' : 's'}` : '';
-      setStatus(`Imported ${name} (${count} page${count === 1 ? '' : 's'}${notes})`, 'ok');
-    }
-    return firstNew;
+    if (!into || into === activeDoc()) return land(name, handle, pdfLibDoc, pdfjsDoc, markups, true);
+    const first = withDoc(into, () => land(name, handle, pdfLibDoc, pdfjsDoc, markups, false));
+    sweepSources();
+    renderTabs();
+    updateTitle();
+    updateToolbarState();
+    return first;
   } catch (err) {
     console.error(err);
-    setStatus(`Couldn't open ${name}: ${err.message || err}`, 'err');
+    setStatus(`Couldn't open ${name}: ${reading ? unreadable(err) : err.message || err}`, 'err');
     return null;
   }
 }
 
-export async function importPdfFile(file) {
+/** Why a file could not be read, in words for the person who chose it.
+ *  The parsers' own messages ("Failed to parse PDF document (line:252
+ *  col:1660 offset=634536)", or a TypeError from deep inside pdf-lib)
+ *  say nothing they can act on. */
+function unreadable(err) {
+  if (err && err.name === 'PasswordException') return 'it needs a password, and Redline can’t open password-protected PDFs.';
+  if (err instanceof RangeError) return 'there wasn’t enough memory to read it.';
+  return 'it isn’t a PDF Redline can read. It may be damaged, or not a PDF at all.';
+}
+
+/** The second half of an import, with nothing left to wait for: the
+ *  loaded file joins the live document. `shown` is false while that
+ *  document is not the one on screen (withDoc), and then nothing is drawn. */
+function land(name, handle, pdfLibDoc, pdfjsDoc, markups, shown) {
+  // Decided here, after the slow part: only now is it known what the
+  // file is landing in.
+  const opening = !state.pages.length && !state.sources.length;
+  if (!opening) checkpoint(`Add ${name}`);
+
+  const sourceId = state.nextSourceId++;
+  state.sources.push({ id: sourceId, name, pdfLibDoc, pdfjsDoc });
+
+  // Merging a second file means the document no longer corresponds to
+  // any single file on disk. Keeping the first file's handle here is
+  // what used to make ⌘S silently replace *that* file with the merged
+  // result — open A then B, hit save, and A is now A+B. Dropping the
+  // handle sends save() through saveAs(), so the target is chosen
+  // explicitly. Every import path funnels through here, so this covers
+  // the picker, drag-and-drop and the Finder handler alike.
+  const justCombined = state.sources.length > 1 && !state.combined;
+  if (justCombined) {
+    state.combined = true;
+    state.fileHandle = null;
+    state.docName = 'Combined.pdf';
+    updateTitle();
+  }
+
+  const count = pdfLibDoc.getPageCount();
+  let firstNew = null;
+  let restored = 0;
+  for (let i = 0; i < count; i++) {
+    const p = pdfLibDoc.getPage(i);
+    const size = p.getSize();   // raw MediaBox — not rotation-adjusted
+    const page = {
+      id: state.nextPageId++,
+      kind: 'imported',
+      sourceId,
+      sourcePageIndex: i,
+      W0: size.width,
+      H0: size.height,
+      rotation: normRot(p.getRotation().angle),
+      annotations: [],
+    };
+    for (const { markup, R } of markups.get(i) || []) {
+      page.annotations.push({ id: state.nextAnnoId++, ...markup });
+      // Saved against one rotation, opened at another: something else
+      // has turned the page since. Carry the markup round with it.
+      if (R !== page.rotation) {
+        remapAnnotationsForRotation({ annotations: [page.annotations.at(-1)], W0: page.W0, H0: page.H0 }, R, page.rotation);
+      }
+      restored++;
+    }
+    state.pages.push(page);
+    if (firstNew === null) firstNew = page.id;
+  }
+
+  if (opening) {
+    state.docName = name;
+    state.fileHandle = handle;
+    startFresh();
+    // Opening a file is not a change to it.
+    markDirty(false);
+    updateTitle();
+  } else {
+    markDirty();
+  }
+  if (!shown) {
+    if (!state.selectedPageId) state.selectedPageId = firstNew;
+  } else {
+    renderThumbnails();
+    if (!state.selectedPageId) selectPage(firstNew);
+  }
+  // After the import message, not before — otherwise it is overwritten
+  // in the same tick and the user never sees why Save changed.
+  if (pdfLibDoc.isEncrypted) {
+    // Shown, but it can never be saved (export.js): better known now than
+    // after an hour of markups.
+    setStatus(`${name} is locked by its author. Redline can show it, but can’t save it.`, 'err');
+  } else if (justCombined) {
+    setStatus(`${shown ? 'Combined document' : `${name} was added to another tab`} — Save now asks where to put it.`, 'ok');
+  } else {
+    const notes = restored ? `, ${restored} editable markup${restored === 1 ? '' : 's'}` : '';
+    setStatus(`${shown ? 'Imported' : 'Opened in its tab:'} ${name} (${count} page${count === 1 ? '' : 's'}${notes})`, 'ok');
+  }
+  return firstNew;
+}
+
+export async function importPdfFile(file, { into = activeDoc() } = {}) {
   const buf = await file.arrayBuffer();
-  return importPdfBytes(buf, file.name);
+  return importPdfBytes(buf, file.name, { into });
 }
 
 // ============================================================

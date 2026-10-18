@@ -148,6 +148,13 @@ export function startFresh() {
   if (doc) stacks.set(doc, { undo: [], redo: [], sinceSave: 0, adrift: false, savedAt: null });
 }
 
+/** Every source an undo or a redo of `doc` could put back. Their pdf.js
+ *  documents must outlive the source leaving the document. */
+export function sourcesHeld(doc) {
+  const h = stacks.get(doc);
+  return h ? [...h.undo, ...h.redo].flatMap((e) => e.snap.sources) : [];
+}
+
 export function historyStatus() {
   const h = history();
   if (!h) return { canUndo: false, canRedo: false, undoLabel: '', redoLabel: '', changes: 0, savedAt: null };

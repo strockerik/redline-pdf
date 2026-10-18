@@ -91,6 +91,20 @@ The richest source of bugs in this app, because the failures are silent.
   size because annots.js measures against it, but is blank. Anything that
   reads pixels, or assumes the page canvas's backing store is the page,
   needs to ask which one is live (`shownPlotImage` in view.js).
+- **Decide where something lands when it is asked for, not when it
+  arrives.** Opening a file awaits its bytes and two parsers — seconds,
+  for a drawing set — and `importPdfBytes` used to read `state` only at
+  the end. Click another tab meanwhile and the file was merged into that
+  one, taking its save target with it. The target document is now taken
+  where the open *begins* (`into`, passed down from openInTabs, the
+  picker, the drop and the file input) and the file lands there out of
+  sight (`withDoc` in state.js), or nowhere if that tab has closed. Any
+  new async path into `state` owes the same.
+- **Ask for everything an event offers before the first await.** A
+  drop's items die when its handler yields. The drop handler asked for
+  each file's handle in turn, awaiting between them, so a drop of two PDFs
+  opened the first and silently lost the second. All the handles are
+  requested up front now.
 - **A guard that runs per item must not undo itself.** Opening runs once
   per handle in a multi-select; the second file must not re-adopt a save
   target the first just gave up. `importPdfBytes` decides in one place:
@@ -142,6 +156,14 @@ undo cannot reach — closing a tab or the window with unsaved work.
   overwrote the *first* file of a merged document with the merged result:
   no dialog, no warning, original gone. A document with no single source
   file must route to Save As.
+- **Never write what you cannot read.** A PDF locked by its author —
+  even with only a permissions password, which every viewer opens without
+  asking — is encrypted throughout, and pdf-lib loads it
+  (`ignoreEncryption`) without decrypting a byte. Saving one copied the
+  still-encrypted pages into a file that no longer said how to decrypt
+  them: every sheet blank, and ⌘S would have put that over the drawing it
+  came from. `buildPdfBytes` refuses any locked source before anything is
+  written, and opening one says it cannot be saved.
 - **Build the bytes before truncating the destination.** `createWritable`
   truncates on open, so a failed export after that point leaves the user's
   original at zero length. `writeToHandle` completes the export into

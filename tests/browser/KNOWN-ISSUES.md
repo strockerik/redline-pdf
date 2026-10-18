@@ -85,7 +85,7 @@ and zooms render *different* pages to the *same* canvas, so a lock keyed by
 page provides no mutual exclusion. The constraint pdf.js enforces is one
 render per **canvas**.
 
-## Mostly closed: pdf.js document lifetime
+## Closed: pdf.js document lifetime
 
 pdf.js used to start a dedicated Web Worker per `getDocument()` call, and
 since nothing here calls `.destroy()`, a moderate session left **27 live
@@ -94,16 +94,22 @@ worker threads**. `js/pages.js` now keeps a lazily-created shared
 Re-measured with the same 24-document probe: **27 worker targets -> 4**,
 and that 4 includes the service worker.
 
-Still open, but bounded: the *documents* are still never destroyed, so
-their parsed structures and byte copies stay in memory until the tab goes
-away. That grows with what the user actually opens rather than with every
-render, which is why it is logged rather than fixed — adding `destroy()`
-calls to the re-import and tab-close paths is real complexity in
-the load path for a leak nobody has hit.
+The *documents* were still never destroyed, and that turned out to be
+far from bounded: pdf.js keeps the operator list of every page it has
+drawn, and every thumbnail is a draw. Eight 60-sheet sets took 231 MB of
+heap, 211 MB of it operator lists for pages nobody was looking at — and
+closing all eight gave back none of it (218 MB after). Rev 0.31 fixed
+both halves (view.js):
+- only the page on screen keeps its operator list (`keepOnly` /
+  `letGo`): eight open sets now take ~30 MB;
+- `sweepSources` destroys the pdf.js document of any source no open
+  document and no undo or redo step can reach: closing all eight returns
+  the heap to where it started (8 MB).
 
-Undo makes this a little worse on purpose. A checkpoint keeps the page
-objects and source documents it refers to, so Clear All, or undoing a
-merge, no longer lets them go until the tab closes or 200 further steps
-push the checkpoint out. GPU plots are different — they are still swept
-when their document leaves the page list, and recompiled if undo brings
-it back.
+Undo still keeps sources alive on purpose: a checkpoint holds the source
+documents it refers to, so Clear All, or undoing a merge, lets them go
+only when the tab closes or 200 further steps push the checkpoint out.
+GPU plots are swept sooner — when their document leaves the page list —
+and recompiled if undo brings it back. The browser suite checks both: a
+source only redo can reach keeps its document; a closed tab's are
+destroyed.

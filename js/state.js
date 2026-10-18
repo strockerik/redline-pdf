@@ -192,6 +192,26 @@ export function activeDoc() {
   return state.docs.find((d) => d.id === state.activeDocId) || null;
 }
 
+/** Run `fn` with `doc` as the live document, out of sight, and put the
+ *  one on screen back afterwards. `fn` must not await: nothing else may
+ *  run while `state` holds a document that is not the one shown. The DOM
+ *  bookkeeping is the screen's, so it stays as it was. Whatever `fn`
+ *  redrew, the caller redraws again. */
+export function withDoc(doc, fn) {
+  if (doc.id === state.activeDocId) return fn();
+  const shown = captureActiveDoc();
+  const { domRefs, pendingCalloutTip } = state;
+  loadDocIntoState(doc);
+  try {
+    return fn();
+  } finally {
+    captureActiveDoc();
+    loadDocIntoState(shown);
+    state.domRefs = domRefs;
+    state.pendingCalloutTip = pendingCalloutTip;
+  }
+}
+
 /** Reset everything except UI preferences (color, font size, zoom). */
 export function resetDocument() {
   state.sources = [];

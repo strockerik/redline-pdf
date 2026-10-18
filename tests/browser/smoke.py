@@ -39,6 +39,62 @@ def ensure_fixture():
     print(f"built fixture: {FIXTURE}")
 
 
+LOCKED_FIXTURE = os.path.join(HERE, "locked-fixture.pdf")
+
+
+def ensure_locked_fixture():
+    """A one-page PDF locked by its author: the standard security handler
+    (RC4, revision 2) with an owner password and an empty user password —
+    so every viewer opens it without asking, as issued drawing sets often
+    are. Built here, stdlib only, because nothing on a stock Mac writes one."""
+    if os.path.exists(LOCKED_FIXTURE):
+        return
+    import hashlib, struct
+    pad = bytes.fromhex("28BF4E5E4E758A4164004E56FFFA01082E2E00B6D0683E802F0CA9FE6453697A")
+
+    def rc4(key, data):
+        S, j = list(range(256)), 0
+        for i in range(256):
+            j = (j + S[i] + key[i % len(key)]) % 256
+            S[i], S[j] = S[j], S[i]
+        i = j = 0
+        out = bytearray()
+        for b in data:
+            i = (i + 1) % 256
+            j = (j + S[i]) % 256
+            S[i], S[j] = S[j], S[i]
+            out.append(b ^ S[(S[i] + S[j]) % 256])
+        return bytes(out)
+
+    P, ID0 = -3904, hashlib.md5(b"redline-locked").digest()
+    O = rc4(hashlib.md5((b"owner" + pad)[:32]).digest()[:5], pad)
+    key = hashlib.md5(pad + O + struct.pack("<i", P) + ID0).digest()[:5]
+    U = rc4(key, pad)
+    content = b"BT /F1 48 Tf 72 400 Td (LOCKED SHEET) Tj ET\n2 w 72 300 m 540 300 l S\n"
+    enc = rc4(hashlib.md5(key + struct.pack("<I", 4)[:3] + b"\0\0").digest()[:10], content)
+    objs = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length %d >>\nstream\n" % len(enc) + enc + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Filter /Standard /V 1 /R 2 /O <" + O.hex().encode() + b"> /U <" + U.hex().encode() + b"> /P %d >>" % P,
+    ]
+    out, offs = bytearray(b"%PDF-1.4\n"), []
+    for n, body in enumerate(objs, 1):
+        offs.append(len(out))
+        out += b"%d 0 obj\n" % n + body + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1)
+    for o in offs:
+        out += b"%010d 00000 n \n" % o
+    out += (b"trailer\n<< /Size %d /Root 1 0 R /Encrypt 6 0 R /ID [<%s> <%s>] >>\nstartxref\n%d\n%%%%EOF\n"
+            % (len(objs) + 1, ID0.hex().encode(), ID0.hex().encode(), xref))
+    with open(LOCKED_FIXTURE, "wb") as f:
+        f.write(out)
+    print(f"built fixture: {LOCKED_FIXTURE}")
+
+
 HEAVY_FIXTURE = os.path.join(HERE, "heavy-fixture.pdf")
 HEAVY_HEX_FIXTURE = os.path.join(HERE, "heavy-hex-fixture.pdf")
 
@@ -1409,6 +1465,11 @@ def surface_checks(ws):
           and ev(ws, "JSON.parse(localStorage.getItem('redline.prefs') || '{}').finderHintDone") is True)
     ws.call("Emulation.setDeviceMetricsOverride", {"width": 390, "height": 780, "deviceScaleFactor": 2, "mobile": True})
     time.sleep(0.6)
+    # Anything that stands past the right edge widens the whole page, and a
+    # phone then shows the app shrunk, or lets it slide sideways. A hidden
+    # label escaping the scrolling toolbar once made it 623 px wide.
+    wide = ev(ws, "({ doc: document.scrollingElement.scrollWidth, screen: document.documentElement.clientWidth })")
+    check("on a phone the app is exactly as wide as the screen", wide["doc"] <= wide["screen"], str(wide))
     PANELS = """(() => ({
       pages: document.getElementById('sidebar').classList.contains('open'),
       markups: !document.getElementById('markupRail').hidden,
@@ -1744,6 +1805,112 @@ def tab_checks(ws):
     check("a cancelled 'Open in Tabs' does not hijack the next 'Open'",
           after["n"] == before["n"] and after["pages"] == before["pages"] + 6,
           f"{before['n']} tab/{before['pages']} pages -> {after['n']} tab/{after['pages']} pages")
+
+
+def lifecycle_checks(ws):
+    """How documents come and go: a file still loading when the user turns
+    to another tab, or closes its own; what a closed tab gives back; a drop
+    of several files; and a file its author has locked."""
+    print("\n=== documents coming and going ===")
+    ensure_locked_fixture()
+    b64 = lambda path: base64.b64encode(open(path, "rb").read()).decode()
+    ev(ws, f"""window.__fx = Uint8Array.from(atob('{b64(FIXTURE)}'), (c) => c.charCodeAt(0));
+      window.__locked = Uint8Array.from(atob('{b64(LOCKED_FIXTURE)}'), (c) => c.charCodeAt(0));
+      window.confirm = () => true;""")
+    # A slow file, made slow on purpose: its parse waits for a gate the
+    # test opens once the user has moved on. Deterministic, unlike a big file.
+    SLOW = """const real = PDFLib.PDFDocument.load; let open; const gate = new Promise((r) => { open = r; });
+      PDFLib.PDFDocument.load = async (...a) => { await gate; return real.apply(PDFLib.PDFDocument, a); };
+      const done = () => { PDFLib.PDFDocument.load = real; };"""
+    MODS = """const { state, captureActiveDoc } = await import('./js/state.js'); const pages = await import('./js/pages.js');
+      const tabs = await import('./js/tabs.js'); const files = await import('./js/files.js'); const view = await import('./js/view.js');
+      const H = await import('./js/history.js'); const pause = (ms) => new Promise((r) => setTimeout(r, ms));"""
+
+    r = ev(ws, f"""(async () => {{ {MODS}
+      tabs.openDocument(); await pages.importPdfBytes(window.__fx.slice().buffer, 'stay.pdf');
+      const stay = state.activeDocId;
+      {SLOW}
+      const loading = files.openInTabs([{{ file: new File([window.__fx], 'slow.pdf', {{ type: 'application/pdf' }}) }}]);
+      await pause(60);
+      document.querySelector(`#tabStrip .tab[data-doc-id="${{stay}}"]`).click();
+      open(); await loading; done(); await pause(300);
+      captureActiveDoc();
+      const rec = (n) => state.docs.find((d) => d.docName === n);
+      return {{ active: state.docName, stay: rec('stay.pdf') && [rec('stay.pdf').pages.length, rec('stay.pdf').combined],
+               slow: rec('slow.pdf') ? rec('slow.pdf').pages.length : null, merged: state.docs.some((d) => d.docName === 'Combined.pdf') }};
+    }})()""", awaitp=True)
+    check("a file still loading when another tab is clicked opens in its own tab",
+          r["slow"] == 3 and not r["merged"], str(r))
+    check("and the tab clicked is left alone, and stays in front",
+          r["stay"] == [3, False] and r["active"] == "stay.pdf", str(r))
+
+    r = ev(ws, f"""(async () => {{ {MODS}
+      {SLOW}
+      const loading = files.openInTabs([{{ file: new File([window.__fx], 'gone.pdf', {{ type: 'application/pdf' }}) }}]);
+      await pause(60);
+      document.querySelector('#tabStrip .tab.active .tab-close').click();
+      open(); const n = await loading; done(); await pause(300);
+      captureActiveDoc();
+      return {{ opened: n, landed: state.docs.some((d) => d.docName === 'gone.pdf' || d.docName === 'Combined.pdf'),
+               status: document.getElementById('statusMsg').textContent }};
+    }})()""", awaitp=True)
+    check("a file whose tab is closed while it loads lands nowhere",
+          r["opened"] == 0 and not r["landed"], str(r))
+    check("and the status line says why", "closed" in r["status"], r["status"])
+
+    r = ev(ws, f"""(async () => {{ {MODS}
+      tabs.openDocument(); await pages.importPdfBytes(window.__fx.slice().buffer, 'a.pdf');
+      await pages.importPdfBytes(window.__fx.slice().buffer, 'b.pdf');      // a merge: an edit
+      const [a, b] = state.sources.map((s) => s.pdfjsDoc);
+      H.undo(); view.renderThumbnails(); await pause(200);
+      const keptForRedo = !b.loadingTask.destroyed;
+      H.redo(); view.renderThumbnails(); await view.renderMainCanvas();
+      const redoRenders = state.pages.length === 6;
+      document.querySelector('#tabStrip .tab.active .tab-close').click(); await pause(400);
+      return {{ keptForRedo, redoRenders, aFreed: a.loadingTask.destroyed, bFreed: b.loadingTask.destroyed }};
+    }})()""", awaitp=True)
+    check("a file only redo can bring back keeps its pdf.js document",
+          r["keptForRedo"] and r["redoRenders"], str(r))
+    check("closing a tab gives back its pdf.js documents", r["aFreed"] and r["bFreed"], str(r))
+
+    ev(ws, "(async () => { (await import('./js/tabs.js')).openDocument(); })()", awaitp=True)
+    data = {"items": [], "files": [FIXTURE, FIXTURE], "dragOperationsMask": 1}
+    # An empty tab has no page to aim at; the drop is the window's.
+    pt = ev(ws, "(() => { const r = document.getElementById('canvasStage').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()")
+    x, y = pt
+    for t in ("dragEnter", "dragOver", "drop"):
+        ws.call("Input.dispatchDragEvent", {"type": t, "x": x, "y": y, "data": data})
+        time.sleep(0.1)
+    for _ in range(60):
+        r = ev(ws, "(async () => { const { state } = await import('./js/state.js'); return { pages: state.pages.length, sources: state.sources.length }; })()", awaitp=True)
+        if r["pages"] >= 6:
+            break
+        time.sleep(0.25)
+    check("two PDFs dropped at once both arrive", r == {"pages": 6, "sources": 2}, str(r))
+
+    r = ev(ws, f"""(async () => {{ {MODS}
+      tabs.openDocument(); await pages.importPdfBytes(window.__locked.slice().buffer, 'locked.pdf');
+      const opened = {{ pages: state.pages.length, status: document.getElementById('statusMsg').textContent }};
+      let wrote = false;
+      state.fileHandle = {{ kind: 'file', name: 'locked.pdf', queryPermission: async () => 'granted',
+        createWritable: async () => {{ wrote = true; return {{ write: async () => {{}}, close: async () => {{}} }}; }} }};
+      await files.save();
+      const r = {{ opened, wrote, alert: document.getElementById('saveAlert').classList.contains('show'),
+                  why: document.getElementById('saveAlertWhy').textContent }};
+      files.dismissSaveAlert();
+      return r;
+    }})()""", awaitp=True)
+    check("a file locked by its author opens, and says it can't be saved",
+          r["opened"]["pages"] == 1 and "locked" in r["opened"]["status"], str(r["opened"]))
+    check("saving it is refused before the file is touched", r["wrote"] is False, str(r))
+    check("and the refusal stays on screen, saying why", r["alert"] and "locked" in r["why"], r["why"])
+
+    r = ev(ws, f"""(async () => {{ {MODS}
+      tabs.openDocument(); const n = state.pages.length;
+      await pages.importPdfBytes(new Uint8Array([37, 80, 68, 70, 45, 49, 46, 52, 10, 1, 2, 3]).buffer, 'broken.pdf');
+      return {{ added: state.pages.length - n, status: document.getElementById('statusMsg').textContent }};
+    }})()""", awaitp=True)
+    check("a damaged file is refused in plain words", r["added"] == 0 and "isn’t a PDF Redline can read" in r["status"], r["status"])
 
 
 def heavy_page_checks(ws, plot):
@@ -2669,6 +2836,7 @@ def main():
         markup_checks(ws3)
         surface_checks(ws3)
         ai_checks(ws3)
+        lifecycle_checks(ws3)
     except TimeoutError:
         failed += 1
         print("FAIL  the renderer stopped answering during the tab checks")

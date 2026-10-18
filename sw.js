@@ -8,7 +8,7 @@
  * for. See precache() below: that is not automatic, and getting it wrong
  * strands an installed app on the previous build for good.
  */
-const CACHE = 'redline-v0.30';
+const CACHE = 'redline-v0.31';
 const VERSION = CACHE.replace('redline-v', '');
 
 const PRECACHE = [

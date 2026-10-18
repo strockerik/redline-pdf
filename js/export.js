@@ -462,6 +462,19 @@ export async function buildPdfBytes({ flatten = false } = {}) {
     requests.get(page.sourceId).push(page.sourcePageIndex);
   }
 
+  // A file its author has locked — even with only a permissions password,
+  // which every viewer opens without asking — is encrypted throughout.
+  // pdf-lib reads it without decrypting anything, so its pages would be
+  // copied still encrypted into a file that no longer says how to decrypt
+  // them: every sheet blank. Refused here, before anything is written, so
+  // ⌘S cannot put that over the drawing it came from.
+  for (const sourceId of requests.keys()) {
+    const src = state.sources.find((s) => s.id === sourceId);
+    if (src && src.pdfLibDoc.isEncrypted) {
+      throw new Error(`${src.name === state.docName ? 'it' : src.name} is locked by its author, and Redline can’t write locked pages without blanking them.`);
+    }
+  }
+
   const queues = new Map();            // "sourceId:pageIndex" -> [copied, ...]
   for (const [sourceId, indices] of requests) {
     const src = state.sources.find((s) => s.id === sourceId);

@@ -6,7 +6,7 @@
  * <input type=file> / download path on iOS, which implements neither
  * the File System Access API nor file handlers.
  */
-import { state, setStatus, markDirty } from './state.js';
+import { state, setStatus, markDirty, activeDoc } from './state.js';
 import { noteClean } from './history.js';
 import { setFinderHintSeen } from './persist.js';
 import { importPdfBytes, importPdfFile } from './pages.js';
@@ -26,13 +26,13 @@ const PDF_PICKER_TYPES = [{
 // ============================================================
 /** Open from a FileSystemFileHandle — the Finder / picker path. The
  *  handle is retained so ⌘S can write straight back to it. */
-async function openFromHandle(handle) {
+async function openFromHandle(handle, { into = activeDoc() } = {}) {
   const file = await handle.getFile();
   const bytes = await file.arrayBuffer();
   // Whether the handle becomes the save target is the import's call: it
   // is the one place that knows if this file opened an empty document or
   // was merged into a document that already had pages (pages.js).
-  return importPdfBytes(bytes, file.name, { handle });
+  return importPdfBytes(bytes, file.name, { handle, into });
 }
 
 /** Wire up the Chrome file handler. When Redline is the app that opened
@@ -67,7 +67,7 @@ export async function openInTabs(entries) {
   for (const entry of entries) {
     // Fill the current tab if it is still empty, so choosing "open in
     // tabs" from a blank app doesn't leave an unused tab at the front.
-    docForNewFile();
+    const into = docForNewFile();
     // Show the tab as what it is — empty — while the file loads. Left
     // alone, the previous document's pages stay on screen under the new
     // tab until the import lands, and for good if it fails.
@@ -75,8 +75,8 @@ export async function openInTabs(entries) {
     renderMainCanvas();
     try {
       const ok = entry.handle
-        ? await openFromHandle(entry.handle)
-        : await importPdfFile(entry.file);
+        ? await openFromHandle(entry.handle, { into })
+        : await importPdfFile(entry.file, { into });
       if (ok !== null) opened++;
     } catch (err) {
       console.error(err);
@@ -142,7 +142,8 @@ export async function openViaPicker() {
       types: PDF_PICKER_TYPES,
       multiple: true,
     });
-    for (const h of handles) await openFromHandle(h);
+    const into = activeDoc();
+    for (const h of handles) await openFromHandle(h, { into });
   } catch (err) {
     if (err.name === 'AbortError') return;   // user dismissed the panel
     console.error(err);
@@ -179,25 +180,28 @@ export function installDragAndDrop() {
     depth = 0;
     overlay.classList.remove('show');
 
-    // Prefer handles when the browser offers them, so a dragged-in file
-    // can still be the ⌘S target.
-    const items = [...(e.dataTransfer.items || [])];
-    const pdfs = [...e.dataTransfer.files].filter(
-      (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name)
-    );
-    if (!pdfs.length) { setStatus('Only PDF files can be opened.', 'err'); return; }
+    const files = [...e.dataTransfer.files];
+    const isPdf = (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
+    if (!files.some(isPdf)) { setStatus('Only PDF files can be opened.', 'err'); return; }
+    // Every file of one drop goes to the document it was dropped on.
+    const into = activeDoc();
 
-    if (canUseFileSystemAccess && items.length && items[0].getAsFileSystemHandle) {
-      for (const item of items) {
-        if (item.kind !== 'file') continue;
-        try {
-          const handle = await item.getAsFileSystemHandle();
-          if (handle && handle.kind === 'file') { await openFromHandle(handle); continue; }
-        } catch { /* fall through to the plain File below */ }
-      }
-      return;
+    // Prefer handles when the browser offers them, so a dragged-in file
+    // can still be the ⌘S target. All of them are asked for now, before
+    // anything awaits: once this handler has yielded, the drop's items are
+    // gone, and asking for the next one gets nothing. Asked for one at a
+    // time, a drop of two files opened the first and lost the second.
+    const fileItems = [...(e.dataTransfer.items || [])].filter((i) => i.kind === 'file');
+    const handles = canUseFileSystemAccess && fileItems[0]?.getAsFileSystemHandle
+      ? fileItems.map((item) => item.getAsFileSystemHandle().catch(() => null))
+      : [];
+
+    for (let i = 0; i < files.length; i++) {
+      if (!isPdf(files[i])) continue;
+      const handle = await handles[i];
+      if (handle && handle.kind === 'file') await openFromHandle(handle, { into });
+      else await importPdfFile(files[i], { into });
     }
-    for (const f of pdfs) await importPdfFile(f);
   });
 }
 

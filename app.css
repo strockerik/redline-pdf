@@ -441,6 +441,11 @@ select, input[type=text]{
   overflow-x:auto; overflow-y:hidden;
   scrollbar-width:none;
   flex-shrink:0;
+  /* What it scrolls must stay inside it. Without a positioned box here,
+     the page field's screen-reader label (.sr-only, absolute) escaped the
+     scroll and stood past the right edge of a phone, making the whole
+     page 623 px wide: shown at 63%, or sliding sideways. */
+  position:relative;
 }
 #pageToolbar::-webkit-scrollbar{ display:none; }
 #pageToolbar .grp{ display:flex; align-items:center; gap:6px; flex-shrink:0; }
