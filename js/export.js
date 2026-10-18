@@ -23,7 +23,7 @@ const {
   PDFDocument, PDFPage, PDFDict, PDFName, PDFRef, PDFString, PDFHexString,
   StandardFonts, rgb, degrees, LineCapStyle, LineJoinStyle,
   pushGraphicsState, popGraphicsState, setGraphicsState, setStrokingColor,
-  setLineWidth, setLineCap, setLineJoin, moveTo, lineTo, stroke,
+  setLineWidth, setLineCap, setLineJoin, moveTo, lineTo, stroke, concatTransformationMatrix,
 } = PDFLib;
 
 // Round caps and joins are what make a chain of straight segments read as
@@ -266,7 +266,7 @@ function nativeBox(pts, R, W0, H0) {
 }
 
 /** Add one markup to `pdfPage` as an annotation. */
-async function attachMarkup(outDoc, pdfPage, font, a, R, W0, H0, serial) {
+async function attachMarkup(outDoc, pdfPage, font, a, R, W0, H0, serial, ox = 0, oy = 0) {
   const bounds = markupBounds(a, font, R, W0, H0);
   if (!bounds) return;
   const { box, inner } = bounds;
@@ -292,7 +292,10 @@ async function attachMarkup(outDoc, pdfPage, font, a, R, W0, H0, serial) {
   const rgbArr = [r2(col.r), r2(col.g), r2(col.b)];
   const dict = {
     Type: 'Annot',
-    Rect: [r2(box.left), r2(box.bottom), r2(box.right), r2(box.top)],
+    // Everything in this dictionary is in the page's own coordinates,
+    // where the shown box may not start at 0,0. The appearance needs no
+    // shift: a viewer maps its BBox onto the Rect, wherever that is.
+    Rect: [r2(box.left + ox), r2(box.bottom + oy), r2(box.right + ox), r2(box.top + oy)],
     F: 4,                                              // print
     P: pdfPage.ref,
     NM: PDFString.of(`redline-${serial}`),
@@ -306,7 +309,7 @@ async function attachMarkup(outDoc, pdfPage, font, a, R, W0, H0, serial) {
     // program; what it looks like is the appearance stream above.
     const flat = (points) => points.flatMap((p) => {
       const n = toNative(R, W0, H0, p.x, p.y);
-      return [r2(n.x), r2(n.y)];
+      return [r2(n.x + ox), r2(n.y + oy)];
     });
     Object.assign(dict, { C: rgbArr, BS: { W: a.size || 2.5 } });
     const first = a.points[0], last = a.points[a.points.length - 1];
@@ -338,7 +341,7 @@ async function attachMarkup(outDoc, pdfPage, font, a, R, W0, H0, serial) {
       const leader = computeLeader(drawn, boxHeight);
       const cl = [leader.tip, leader.knee, leader.attach].flatMap((p) => {
         const q = toNative(R, W0, H0, p.x, p.y);
-        return [r2(q.x), r2(q.y)];
+        return [r2(q.x + ox), r2(q.y + oy)];
       });
       Object.assign(dict, { IT: 'FreeTextCallout', CL: cl, LE: 'OpenArrow' });
     }
@@ -516,10 +519,16 @@ export async function buildPdfBytes({ flatten = false, doc = activeDoc() } = {})
     // additive, which is why `rotation` is stored as an absolute value.
     newPage.setRotation(degrees(page.rotation));
 
+    // The shown box of a cropped page, or one whose box is not at 0,0,
+    // starts somewhere else in the page's coordinates (pages.js).
+    const ox = page.ox || 0, oy = page.oy || 0;
+    const shifted = flatten && page.annotations.length && (ox || oy);
+    if (shifted) newPage.pushOperators(pushGraphicsState(), concatTransformationMatrix(1, 0, 0, 1, ox, oy));
     for (const a of page.annotations) {
       if (flatten) drawAnnotationOnPage(newPage, font, a, page.rotation, page.W0, page.H0);
-      else await attachMarkup(outDoc, newPage, font, a, page.rotation, page.W0, page.H0, ++serial);
+      else await attachMarkup(outDoc, newPage, font, a, page.rotation, page.W0, page.H0, ++serial, ox, oy);
     }
+    if (shifted) newPage.pushOperators(popGraphicsState());
   }
 
   return outDoc.save({ objectsPerTick: SAVE_PACE });

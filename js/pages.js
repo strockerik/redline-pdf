@@ -147,14 +147,19 @@ function land(name, handle, pdfLibDoc, pdfjsDoc, markups, shown) {
   let restored = 0;
   for (let i = 0; i < count; i++) {
     const p = pdfLibDoc.getPage(i);
-    const size = p.getSize();   // raw MediaBox — not rotation-adjusted
+    const box = visibleBox(p);  // not rotation-adjusted
     const page = {
       id: state.nextPageId++,
       kind: 'imported',
       sourceId,
       sourcePageIndex: i,
-      W0: size.width,
-      H0: size.height,
+      W0: box.width,
+      H0: box.height,
+      // Where that box starts in the page's own coordinates. Markups are
+      // kept relative to the box, as everything on screen is; the file
+      // needs them back where the box is (export.js).
+      ox: box.x,
+      oy: box.y,
       rotation: normRot(p.getRotation().angle),
       annotations: [],
     };
@@ -205,6 +210,23 @@ function land(name, handle, pdfLibDoc, pdfjsDoc, markups, shown) {
     setStatus(`${shown ? 'Imported' : 'Opened in its tab:'} ${name} (${count} page${count === 1 ? '' : 's'}${notes})`, 'ok');
   }
   return firstNew;
+}
+
+/** The part of a page that is shown: its CropBox, kept within its
+ *  MediaBox — what pdf.js draws and plot.js compiles. Taking the MediaBox
+ *  alone, as this once did, laid a page cropped in Preview out at its
+ *  uncropped size: the crop was stretched to fill it, and every markup
+ *  saved at the wrong place. Nor need a box start at 0,0. */
+function visibleBox(p) {
+  const norm = (b) => ({ x0: Math.min(b.x, b.x + b.width), y0: Math.min(b.y, b.y + b.height),
+    x1: Math.max(b.x, b.x + b.width), y1: Math.max(b.y, b.y + b.height) });
+  const m = norm(p.getMediaBox());
+  const c = norm(p.getCropBox());
+  const x0 = Math.max(m.x0, c.x0), y0 = Math.max(m.y0, c.y0);
+  const x1 = Math.min(m.x1, c.x1), y1 = Math.min(m.y1, c.y1);
+  // A crop that misses the page altogether is ignored, as pdf.js does.
+  if (!(x1 > x0 && y1 > y0)) return { x: m.x0, y: m.y0, width: m.x1 - m.x0, height: m.y1 - m.y0 };
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
 }
 
 export async function importPdfFile(file, { into = activeDoc() } = {}) {

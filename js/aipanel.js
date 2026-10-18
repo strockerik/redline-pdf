@@ -9,7 +9,7 @@
  * on this machine. After that it checks when the app starts, every 30
  * seconds while the window is in front, and whenever something fails.
  */
-import { aiConfig, saveAiConfig, aiStatus, chatStream, localAccess, AI_DEFAULTS } from './ai.js';
+import { aiConfig, saveAiConfig, aiStatus, chatStream, localAccess, warmUp, AI_DEFAULTS } from './ai.js';
 import { chooseText } from './aitext.js';
 import { state } from './state.js';
 
@@ -221,9 +221,15 @@ async function prompt(question, scope, signal) {
   const text = chosen.passages.map((p) => `(p. ${p.n}) ${p.text.replace(/\n+/g, ' / ')}`).join('\n');
   return {
     messages: [
+      // The rules and the conversation so far first, the passages for this
+      // question last, beside it. Ollama keeps what it has already read
+      // of a conversation as long as the start of the next request
+      // matches: with the passages — new for every question — ahead of
+      // the history, every follow-up made it read the whole conversation
+      // again. And the passages sit next to the question they answer.
       { role: 'system', content: SYSTEM_DOC },
-      { role: 'system', content: `Document: ${state.docName}, ${state.pages.length} pages. Passages that may bear on the question:\n\n${text || '(No readable text found for this question.)'}` },
       ...history,
+      { role: 'system', content: `Document: ${state.docName}, ${state.pages.length} pages. Passages that may bear on the question:\n\n${text || '(No readable text found for this question.)'}` },
       { role: 'user', content: question },
     ],
     source: chosen,
@@ -332,7 +338,11 @@ function installSettings() {
 export function aiPanelOpened() {
   if (!aiConfig.used) saveAiConfig({ used: true });
   startPolling();
-  check();
+  // Opening the panel is the sign a question is coming: have the model
+  // loaded by the time it is asked. Only when Ollama has it — and only
+  // from here, not from the polling, so a panel never opened never takes
+  // gigabytes of a small Mac's memory.
+  check().then((s) => { if (s && s.up && s.hasModel) warmUp(); });
   if (!$('aiLog').children.length) {
     addMessage('bot hint', 'Ask about the open document. The model reads its text — not its linework, so a table '
       + 'drawn in a CAD font can’t be read — and says which sheets it used. Check anything that matters.');

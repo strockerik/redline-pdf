@@ -135,6 +135,26 @@ export async function* chatStream(messages, { signal, options } = {}) {
   }
 }
 
+/** Load the model now, so the first answer does not wait for it: about
+ *  6 s for gemma3:4b on an 8 GB Mac, spent while the question is still
+ *  being typed instead of after it is asked. An empty chat is Ollama's way
+ *  of saying "load, answer nothing". It goes with the same context size
+ *  as a real request — a different num_ctx makes Ollama load the model a
+ *  second time — and with Ollama's own keep-alive, so an unused model
+ *  still leaves memory after five minutes. Once per model a session;
+ *  never throws. */
+let warmed = '';
+export async function warmUp() {
+  if (warmed === aiConfig.model) return;
+  warmed = aiConfig.model;
+  try {
+    const r = await fetch(`${aiConfig.host}/api/chat`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body([], { stream: false }),
+    });
+    if (!r.ok) warmed = '';
+  } catch { warmed = ''; }
+}
+
 async function failure(r) {
   let detail = '';
   try { detail = (await r.json()).error || ''; } catch { /* not JSON */ }

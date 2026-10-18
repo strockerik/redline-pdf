@@ -1734,6 +1734,11 @@ class FakeOllama:
                     data = (json.dumps(obj) + "\n").encode()
                     self.wfile.write(b"%x\r\n%s\r\n" % (len(data), data)); self.wfile.flush()
                 try:
+                    if self.path == "/api/chat" and not req.get("messages"):
+                        # Ollama's preload: load the model, say nothing.
+                        chunk({"model": req.get("model"), "done": True, "done_reason": "load"})
+                        self.wfile.write(b"0\r\n\r\n"); self.wfile.flush()
+                        return
                     for i, w in enumerate(fake.WORDS):
                         chunk({"message": {"role": "assistant", "content": ("" if i == 0 else " ") + w}, "done": False})
                         time.sleep(fake.delay)
@@ -1781,6 +1786,9 @@ def ai_checks(ws):
         check("opening it finds Ollama and the model, and says which", panel["open"] and panel["ask"] and panel["status"] == ""
               and panel["model"] == "gemma3:4b", str(panel))
         check("and it takes the markups list's place rather than squeezing the sheet further", panel["markups"] is False)
+        warm = [r[2] for r in fake.requests if r[0] == "POST" and not r[2].get("messages")]
+        check("opening it loads the model at once, at the context a question will ask for",
+              len(warm) == 1 and warm[0]["model"] == "gemma3:4b" and warm[0]["options"].get("num_ctx") == 8192, str(warm))
 
         click(ws, "#aiInput")
         ws.call("Input.insertText", {"text": "What is a revision cloud?"})
@@ -2141,6 +2149,16 @@ def lifecycle_checks(ws):
       return {{ added: state.pages.length - n, status: document.getElementById('statusMsg').textContent }};
     }})()""", awaitp=True)
     check("a damaged file is refused in plain words", r["added"] == 0 and "isn’t a PDF Redline can read" in r["status"], r["status"])
+
+    # A page cropped in Preview: shown at the crop, not stretched to the
+    # whole sheet it was cut from.
+    r = ev(ws, f"""(async () => {{ {MODS}
+      const d = await PDFLib.PDFDocument.create(); d.addPage([612, 792]).setCropBox(100, 200, 300, 400);
+      tabs.openDocument(); await pages.importPdfBytes((await d.save()).buffer, 'cropped.pdf'); await pause(800);
+      const c = document.getElementById('pageCanvas'); const p = state.pages[0];
+      return {{ W0: p.W0, H0: p.H0, css: +(parseFloat(c.style.width) / parseFloat(c.style.height)).toFixed(3), drawn: +(c.width / c.height).toFixed(3) }};
+    }})()""", awaitp=True)
+    check("a cropped page is laid out at its crop, not stretched", r["W0"] == 300 and r["H0"] == 400 and r["css"] == r["drawn"] == 0.75, str(r))
 
 
 def heavy_page_checks(ws, plot):

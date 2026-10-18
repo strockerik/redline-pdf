@@ -113,6 +113,25 @@ export function pageBlocks(page) {
   return texts.get(page);
 }
 
+// Pages read at once for a first question about a whole set. All of them
+// together queued every page's text ahead of the page on screen in pdf.js,
+// and set every heavy sheet compiling at the same moment; a few at a time
+// leaves room for both.
+const READ_AT_ONCE = 3;
+
+async function readAll(pool) {
+  const out = new Array(pool.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < pool.length) {
+      const i = next++, p = pool[i];
+      out[i] = { n: state.pages.indexOf(p) + 1, page: p, blocks: await pageBlocks(p) };
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(READ_AT_ONCE, pool.length) }, worker));
+  return out;
+}
+
 const STOP = new Set(('the and for are was with this that what where which who how many much does from have has into '
   + 'its their there they them than then when will would could should can not any all per our you your about '
   + 'sheet sheets page pages drawing drawings plan plans show shown tell give list is it of in on to a an do me').split(' '));
@@ -177,7 +196,7 @@ function hits(text, term) {
 export async function chooseText(question, { scope, budget }) {
   const current = state.pages.find((p) => p.id === state.selectedPageId);
   const pool = scope === 'page' ? (current ? [current] : []) : state.pages.slice();
-  const read = await Promise.all(pool.map(async (p) => ({ n: state.pages.indexOf(p) + 1, page: p, blocks: await pageBlocks(p) })));
+  const read = await readAll(pool);
   const empty = read.filter((r) => !r.blocks.length).map((r) => r.n);
 
   const all = [], seen = new Set();

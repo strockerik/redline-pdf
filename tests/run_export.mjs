@@ -150,6 +150,29 @@ try {
   check('missing source throws', /Missing source/.test(e.message), e.message);
 }
 
+// --- 7c. A page whose shown box does not start at 0,0 ---
+// Markups are kept relative to the shown box (pages.js); in the file they
+// belong where that box is, or every one lands off the page.
+{
+  const off = await PDFDocument.create();
+  off.addPage([400, 300]).setMediaBox(100, 200, 400, 300);
+  const offDoc = await PDFDocument.load(await off.save());
+  S.sources.push({ id: 8, name: 'offset.pdf', pdfLibDoc: offDoc, pdfjsDoc: null });
+  const mark = { id: 1, type: 'rect', color: '#1f6feb', size: 2, points: [{ x: 10, y: 10 }, { x: 60, y: 40 }] };
+  S.pages = [{ id: 1, kind: 'imported', sourceId: 8, sourcePageIndex: 0, W0: 400, H0: 300, ox: 100, oy: 200, rotation: 0, annotations: [mark] }];
+  const saved = await PDFDocument.load(await buildPdfBytes());
+  const rect = saved.getPage(0).node.Annots().lookup(0).lookup(PDFLib.PDFName.of('Rect')).asArray().map((n) => n.asNumber());
+  // Visual (10, 10)..(60, 40) on a 300-high box is native x 10..60, y 260..290,
+  // then moved to where the box is: x 110..160, y 460..490 (give or take the stroke).
+  check('an offset page keeps its markups inside the shown box', rect[0] > 100 && rect[2] < 170 && rect[1] > 450 && rect[3] < 500, rect.join(' '));
+  const flat = await PDFDocument.load(await buildPdfBytes({ flatten: true }));
+  const ops = flat.getPage(0).node.Contents();
+  const streams = ops && typeof ops.size === 'function' ? Array.from({ length: ops.size() }, (_, i) => ops.lookup(i)) : [ops];
+  const text = streams.map((st) => { const b = PDFLib.decodePDFRawStream(st).decode(); let t = ''; for (const c of b) t += String.fromCharCode(c); return t; }).join('\n');
+  check('and a flattened one is drawn there too', /1 0 0 1 100 200 cm/.test(text), text.slice(0, 160));
+  S.sources.pop();
+}
+
 // --- 7b. A locked file is refused, not written with its pages blanked ---
 {
   const locked = await PDFDocument.create();

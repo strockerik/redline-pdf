@@ -228,6 +228,13 @@ error that only shows up on 90°/270° pages and is miserable to eyeball.
   naively, image layers are not re-rendered as you zoom. If a sheet looks
   wrong on screen, compare against the bitmap fallback (set
   `plotFailed` on its record) before suspecting the file.
+- **A page's size is its shown box, not its MediaBox.** `W0`/`H0` are the
+  CropBox kept within the MediaBox — what pdf.js draws and plot.js
+  compiles — and `ox`/`oy` are where that box starts in the page's own
+  coordinates (`visibleBox` in pages.js). Markups live relative to the
+  box; export adds the origin back, to the annotation's fields and, when
+  flattening, as one `cm`. A page cropped in Preview was once laid out at
+  its uncropped size, stretched, with every markup saved off by the crop.
 - **`#pageCanvas` stays in the layout at full page size even when the
   plot canvas is doing the drawing.** annots.js measures against it. On a
   plot page it has a 2x2 backing store and nothing to show.
@@ -305,6 +312,12 @@ error that only shows up on 90°/270° pages and is miserable to eyeball.
     Ollama refuses `gemma4:e2b` outright — it needs 6.9 GB and macOS lets
     the GPU use 4.8 GB, at any context size. `gemma3:4b` is the default:
     ~6 s to load, ~32 tokens/s. 16 GB or more: `gemma4:e4b`.
+  - **The model is loaded when the panel opens** (`warmUp` in ai.js: an
+    empty chat, at the same `num_ctx`, or Ollama loads it twice), so the
+    first answer does not wait ~6 s for it. Only from the panel, never from
+    the polling: a panel never opened takes none of a small Mac's memory.
+    The passages go *after* the conversation, beside the question, so a
+    follow-up can reuse what Ollama has already read of it.
   - **Always send `num_ctx`.** Ollama's default is a 4K context and it
     truncates longer prompts silently.
   - **The deployed app needs Ollama to allow its origin.** Ollama accepts
