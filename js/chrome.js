@@ -25,6 +25,7 @@ import { undo, redo, historyStatus } from './history.js';
 import { saveAs, downloadCopy, dismissSaveAlert, canUseFileSystemAccess } from './files.js';
 import { renderTabs } from './tabs.js';
 import { finderHintSeen, setFinderHintSeen } from './persist.js';
+import { installAiPanel, aiPanelOpened } from './aipanel.js';
 
 const $ = (id) => document.getElementById(id);
 const show = (el, on) => { el.hidden = !on; };
@@ -295,12 +296,13 @@ function refreshMarkups() {
 // a panel beside the sheet and none of this applies to it.
 // ============================================================
 function syncScrim() {
-  const open = $('sidebar').classList.contains('open') || (isNarrow() && !$('markupRail').hidden);
+  const open = $('sidebar').classList.contains('open')
+    || (isNarrow() && (!$('markupRail').hidden || !$('aiRail').hidden));
   $('drawerScrim').classList.toggle('show', open);
 }
 
 function setPagesDrawerOpen(open) {
-  if (open && isNarrow()) setRailOpen(false);
+  if (open && isNarrow()) { setRailOpen(false); setAiOpen(false); }
   $('sidebar').classList.toggle('open', open);
   $('btnPages').setAttribute('aria-expanded', String(open));
   syncScrim();
@@ -312,14 +314,28 @@ function installDrawers() {
   $('btnPages').addEventListener('click', () => setPagesDrawerOpen(!$('sidebar').classList.contains('open')));
   $('drawerScrim').addEventListener('click', () => {
     setPagesDrawerOpen(false);
-    if (isNarrow()) setRailOpen(false);
+    if (isNarrow()) { setRailOpen(false); setAiOpen(false); }
   });
+}
+
+/** The local AI's panel. On the right like the markups list, and one of
+ *  the two at a time: side by side they would leave the sheet a strip. */
+function setAiOpen(open) {
+  const rail = $('aiRail');
+  if (rail.hidden === !open) return;
+  if (open) { setRailOpen(false); if (isNarrow()) setPagesDrawerOpen(false); }
+  show(rail, open);
+  syncScrim();
+  $('btnAi').setAttribute('aria-expanded', String(open));
+  $('btnAi').classList.toggle('open', open);
+  if (open) aiPanelOpened();
+  renderMainCanvas();
 }
 
 function setRailOpen(open) {
   const rail = $('markupRail');
   if (rail.hidden === !open) return;
-  if (open && isNarrow()) setPagesDrawerOpen(false);
+  if (open) { setAiOpen(false); if (isNarrow()) setPagesDrawerOpen(false); }
   show(rail, open);
   syncScrim();
   $('btnMarkups').setAttribute('aria-expanded', String(open));
@@ -387,6 +403,7 @@ export function dismissOverlays() {
   if (closeFileMenu()) return true;
   if ($('sidebar').classList.contains('open')) { setPagesDrawerOpen(false); return true; }
   if (isNarrow() && !$('markupRail').hidden) { setRailOpen(false); return true; }
+  if (isNarrow() && !$('aiRail').hidden) { setAiOpen(false); return true; }
   return false;
 }
 
@@ -587,6 +604,9 @@ export function installChrome() {
 
   installFileMenu();
   installDrawers();
+  $('btnAi').addEventListener('click', () => setAiOpen($('aiRail').hidden));
+  $('btnCloseAi').addEventListener('click', () => setAiOpen(false));
+  installAiPanel();
   installPageNav();
   installMarkups();
   installShortcuts();

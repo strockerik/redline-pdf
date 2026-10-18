@@ -749,11 +749,15 @@ function takeAhead(page, backing) {
 function drawAheadSoon(from) {
   clearTimeout(aheadTimer);
   const run = ++aheadRun;
-  aheadTimer = setTimeout(() => {
+  const go = () => {
+    if (run !== aheadRun) return;
+    // The thumbnail rail first: it is on screen, and these are not yet.
+    if (thumbsDoneGeneration !== paintGeneration) { aheadTimer = setTimeout(go, AHEAD_MS); return; }
     // Through the render queue, so it never shares pdf.js with a page
     // render that is on its way to the screen.
     renderQueue = renderQueue.then(() => drawAhead(from, run)).then(() => {}, () => {});
-  }, AHEAD_MS);
+  };
+  aheadTimer = setTimeout(go, AHEAD_MS);
 }
 
 async function drawAhead(from, run) {
@@ -1324,6 +1328,11 @@ async function paintThumbCanvas(page) {
 }
 
 let paintGeneration = 0;
+// The generation whose thumbnails have all been painted. While it lags
+// paintGeneration the rail is still filling in, and the pages drawn ahead
+// wait for it (drawAheadSoon): a full-size render next door slowed the
+// last thumbnails of a newly opened file noticeably.
+let thumbsDoneGeneration = 0;
 
 /** Guide §6: render thumbnails sequentially. Concurrent pdf.js renders
  *  are flaky, and at personal-document scale this is not a bottleneck. */
@@ -1340,6 +1349,7 @@ async function paintAllThumbs(generation) {
       console.error('thumbnail render failed', err);
     }
   }
+  thumbsDoneGeneration = generation;
   pumpHeavyThumbs();
 }
 

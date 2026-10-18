@@ -50,6 +50,10 @@ and it works with no network connection once installed.
   overwriting whichever file happened to be first. The header says how
   many changes are unsaved and when you last saved; a save that fails
   stays on screen until you deal with it, with a way out.
+- **Local AI (optional)** — with [Ollama](https://ollama.com) running on
+  the Mac, the AI panel answers questions using a small model on the same
+  machine; nothing is uploaded. Without it, Redline is unchanged. See
+  "Local AI" below.
 - **Nothing lingers** — documents close with the app, and every launch
   starts empty. Only your fit mode, colour, text size and pen size are
   remembered. Save before you quit; closing with unsaved notes asks first
@@ -73,6 +77,24 @@ it has to be set from Finder.
 **iPhone (Safari).** Open the URL → Share → **Add to Home Screen**. No
 file handler on iOS; open PDFs through the Open button or the share
 sheet, and saving downloads to the Files app.
+
+## Local AI
+
+1. Install Ollama: `curl -fsSL https://ollama.com/install.sh | sh`
+2. Download a model that fits: `ollama pull gemma3:4b` on an 8 GB Mac
+   (Gemma 4's smaller model needs more memory than an 8 GB Mac gives the
+   GPU); `gemma4:e4b` with 16 GB or more. Change it in the panel's settings.
+3. For the installed app, let Ollama accept requests from it, and restart
+   Ollama's server (quitting the menu-bar app does not):
+   ```sh
+   launchctl setenv OLLAMA_ORIGINS "https://strockerik.github.io"
+   launchctl kickstart -k gui/$(id -u)/com.ollama.ollama
+   ```
+   The first line has to be run again after a restart of the Mac.
+
+Click **AI** in the header. The dot beside it is green when the model is
+ready, amber when Ollama is running without that model, grey when Ollama
+isn't answering — and the panel says what to do in each case.
 
 ## Keyboard
 

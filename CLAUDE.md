@@ -54,6 +54,9 @@ js/history.js   undo / redo: one stack of checkpoints per document
 js/tabs.js      document tabs: the open-document list and switching
 js/chrome.js    the command surface: file menu, properties row, page
                 field, markups list, save chip, save-failure alert
+js/ai.js        the local model: Ollama's HTTP API on this Mac. Networking
+                only — no DOM, no state, no imports
+js/aipanel.js   the AI panel: status dot, conversation, settings
 js/main.js      wiring, keyboard, boot
 ```
 
@@ -269,6 +272,26 @@ error that only shows up on 90°/270° pages and is miserable to eyeball.
   `data-tip`, `aria-keyshortcuts`) and gets the hover box from chrome.js.
   Don't give it a `title` too, or the browser shows its own tooltip as
   well. Undo and Redo keep their `data-tip` current with what they would do.
+- **The AI is optional and local.** `ai.js` talks to Ollama at
+  `http://localhost:11434` and nothing else; nothing in the page,
+  coordinate or export code imports it, so it cannot break a saved PDF.
+  Nothing it produces enters the document unless the user accepts it,
+  through the normal edit path (undoable). It does not look for Ollama
+  until the panel has been opened once on that machine.
+  - **Which model is a hardware question.** On the owner's 8 GB M3 Mac,
+    Ollama refuses `gemma4:e2b` outright — it needs 6.9 GB and macOS lets
+    the GPU use 4.8 GB, at any context size. `gemma3:4b` is the default:
+    ~6 s to load, ~32 tokens/s. 16 GB or more: `gemma4:e4b`.
+  - **Always send `num_ctx`.** Ollama's default is a 4K context and it
+    truncates longer prompts silently.
+  - **The deployed app needs Ollama to allow its origin.** Ollama accepts
+    localhost pages by default, not `https://strockerik.github.io`:
+    `launchctl setenv OLLAMA_ORIGINS "https://strockerik.github.io"`, then
+    `launchctl kickstart -k gui/$(id -u)/com.ollama.ollama` — quitting the
+    menu-bar app leaves the server running with the old setting. The
+    setenv does not survive a reboot. Never `*`.
+  - The browser suite tests the panel against a stand-in Ollama
+    (`FakeOllama` in smoke.py), so it needs no model.
 - **A failed save goes to `#saveAlert`, never `setStatus`.** It must stay
   on screen until dealt with.
 - **A trackpad pinch is a `wheel` event with `ctrlKey` set** and is

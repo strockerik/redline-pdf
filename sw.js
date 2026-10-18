@@ -8,7 +8,7 @@
  * for. See precache() below: that is not automatic, and getting it wrong
  * strands an installed app on the previous build for good.
  */
-const CACHE = 'redline-v0.26';
+const CACHE = 'redline-v0.27';
 const VERSION = CACHE.replace('redline-v', '');
 
 const PRECACHE = [
@@ -26,6 +26,8 @@ const PRECACHE = [
   './js/tabs.js',
   './js/history.js',
   './js/chrome.js',
+  './js/ai.js',
+  './js/aipanel.js',
   './js/export.js',
   './js/plot.js',
   './js/plotcompile.js',

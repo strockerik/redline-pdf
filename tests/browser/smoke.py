@@ -1438,6 +1438,155 @@ def surface_checks(ws):
     time.sleep(0.4)
 
 
+class FakeOllama:
+    """A stand-in for Ollama's HTTP API, so the AI panel can be tested
+    without a model: /api/tags, and /api/chat streaming newline-delimited
+    JSON a word at a time. Answers CORS preflights, as Ollama does for an
+    origin it allows. Records every request it is sent."""
+
+    WORDS = ("A revision cloud marks what changed on a sheet since the last issue . "
+             "It is drawn around the change and tagged with the revision number .").split()
+
+    def __init__(self, port):
+        import http.server, threading
+        fake = self
+        self.port, self.requests, self.models, self.delay = port, [], ["gemma3:4b"], 0.03
+
+        class H(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+            def log_message(self, *a): pass
+            def cors(self):
+                # No keep-alive: a connection the browser holds open would
+                # outlive stop(), and Ollama would never look gone.
+                self.close_connection = True
+                self.send_header("Connection", "close")
+                self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin", "*"))
+                self.send_header("Access-Control-Allow-Headers", "Content-Type")
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            def do_OPTIONS(self):
+                self.send_response(204); self.cors(); self.send_header("Content-Length", "0"); self.end_headers()
+            def do_GET(self):
+                fake.requests.append(("GET", self.path, None))
+                body = json.dumps({"models": [{"name": m} for m in fake.models]}).encode()
+                self.send_response(200); self.cors()
+                self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(body)))
+                self.end_headers(); self.wfile.write(body)
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length", "0"))
+                req = json.loads(self.rfile.read(n) or b"{}")
+                fake.requests.append(("POST", self.path, req))
+                self.send_response(200); self.cors()
+                self.send_header("Content-Type", "application/x-ndjson"); self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                def chunk(obj):
+                    data = (json.dumps(obj) + "\n").encode()
+                    self.wfile.write(b"%x\r\n%s\r\n" % (len(data), data)); self.wfile.flush()
+                try:
+                    for i, w in enumerate(fake.WORDS):
+                        chunk({"message": {"role": "assistant", "content": ("" if i == 0 else " ") + w}, "done": False})
+                        time.sleep(fake.delay)
+                    chunk({"message": {"role": "assistant", "content": ""}, "done": True})
+                    self.wfile.write(b"0\r\n\r\n"); self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass                                  # the page stopped reading: that is Stop working
+
+        class Server(http.server.ThreadingHTTPServer):
+            daemon_threads = True
+            def handle_error(self, request, client_address): pass     # a reader that stopped: Stop, working
+        self.server = Server(("127.0.0.1", port), H)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def ai_checks(ws):
+    """The local AI panel, against a stand-in Ollama: it looks for nothing
+    until opened, streams an answer, stops when told, says plainly what is
+    missing, and never touches the document."""
+    print("\n=== local AI panel ===")
+    fake = FakeOllama(11450)
+    try:
+        # This session has never opened the panel: nothing has been asked
+        # of localhost, and nothing is polling it.
+        unused = ev(ws, "(async () => !(await import('./js/ai.js')).aiConfig.used && document.getElementById('aiDot').dataset.state === 'unknown')()", awaitp=True)
+        ev(ws, "(async () => { (await import('./js/ai.js')).saveAiConfig({ host: 'http://localhost:11450', model: 'gemma3:4b' }); })()", awaitp=True)
+        time.sleep(0.6)
+        check("nothing contacts Ollama until the AI panel is opened", unused is True and len(fake.requests) == 0,
+              f"unused {unused}, {len(fake.requests)} requests")
+        dirty0 = ev(ws, "(async () => { const { state } = await import('./js/state.js'); const { historyStatus } = await import('./js/history.js'); return [state.dirty, historyStatus().changes]; })()", awaitp=True)
+        click(ws, "#btnMarkups")
+        time.sleep(0.4)
+        click(ws, "#btnAi")
+        wait_for(ws, "document.getElementById('aiDot').dataset.state === 'ready'", timeout=10, label="AI ready")
+        panel = ev(ws, """({ open: !document.getElementById('aiRail').hidden, markups: !document.getElementById('markupRail').hidden,
+          status: document.getElementById('aiStatusLine').innerText, ask: !document.getElementById('btnAiAsk').disabled,
+          model: document.getElementById('aiModelName').textContent })""")
+        check("opening it finds Ollama and the model, and says which", panel["open"] and panel["ask"] and panel["status"] == ""
+              and panel["model"] == "gemma3:4b", str(panel))
+        check("and it takes the markups list's place rather than squeezing the sheet further", panel["markups"] is False)
+
+        click(ws, "#aiInput")
+        ws.call("Input.insertText", {"text": "What is a revision cloud?"})
+        key(ws, "Enter", "Enter", 13, meta=True)
+        time.sleep(0.25)
+        mid = ev(ws, """({ text: document.querySelector('#aiLog .ai-msg.bot:last-child').textContent,
+          stop: !document.getElementById('btnAiStop').hidden, dot: document.getElementById('aiDot').dataset.state })""")
+        wait_for(ws, "document.getElementById('btnAiStop').hidden", timeout=15, label="answer finished")
+        done = ev(ws, "document.querySelector('#aiLog .ai-msg.bot:last-child').textContent")
+        check("⌘Return asks, and the answer arrives a word at a time", 0 < len(mid["text"]) < len(done) and mid["stop"] and mid["dot"] == "busy",
+              f"{mid} / {done!r}")
+        check("all of it", done == " ".join(FakeOllama.WORDS), repr(done))
+        post = next(r[2] for r in reversed(fake.requests) if r[0] == "POST")
+        check("asking for the context it needs, not Ollama's silent 4K default",
+              post["options"].get("num_ctx") == 8192 and post["model"] == "gemma3:4b" and post["stream"] is True, str(post.get("options")))
+        check("with the question last, after the instructions",
+              post["messages"][0]["role"] == "system" and post["messages"][-1] == {"role": "user", "content": "What is a revision cloud?"},
+              str(post["messages"]))
+
+        fake.delay = 0.25                                 # slow enough to stop part way
+        click(ws, "#aiInput")
+        ws.call("Input.insertText", {"text": "And a delta?"})
+        click(ws, "#btnAiAsk")
+        wait_for(ws, "document.querySelector('#aiLog .ai-msg.bot:last-child').textContent.split(' ').length >= 3", timeout=10, label="streaming")
+        click(ws, "#btnAiStop")
+        time.sleep(0.2)
+        at_stop = ev(ws, "document.querySelector('#aiLog .ai-msg.bot:last-child').textContent")
+        time.sleep(1.0)
+        after = ev(ws, """({ text: document.querySelector('#aiLog .ai-msg.bot:last-child').textContent,
+          cls: document.querySelector('#aiLog .ai-msg.bot:last-child').className, ask: !document.getElementById('btnAiAsk').hidden })""")
+        check("Stop ends the answer where it is", after["text"] == at_stop and "stopped" in after["cls"] and after["ask"]
+              and len(at_stop.split()) < len(FakeOllama.WORDS), str(after))
+        follow = next(r[2] for r in reversed(fake.requests) if r[0] == "POST")
+        check("and a second question carries the conversation so far", [m["role"] for m in follow["messages"]] == ["system", "user", "assistant", "user"],
+              str([m["role"] for m in follow["messages"]]))
+        fake.delay = 0.03
+
+        dirty1 = ev(ws, "(async () => { const { state } = await import('./js/state.js'); const { historyStatus } = await import('./js/history.js'); return [state.dirty, historyStatus().changes]; })()", awaitp=True)
+        check("talking to the model changes nothing in the document", dirty1 == dirty0, f"{dirty0} -> {dirty1}")
+
+        fake.models = ["llama3.2:3b"]
+        ev(ws, "window.dispatchEvent(new Event('focus')); document.dispatchEvent(new Event('visibilitychange'))")
+        wait_for(ws, "document.getElementById('aiDot').dataset.state === 'nomodel'", timeout=10, label="model gone")
+        missing = ev(ws, "document.getElementById('aiStatusLine').innerText")
+        check("a model that isn't downloaded is named, with the command to get it",
+              "ollama pull gemma3:4b" in missing and "llama3.2:3b" in missing and ev(ws, "document.getElementById('btnAiAsk').disabled") is True, missing)
+        fake.models = ["gemma3:4b"]
+    finally:
+        fake.stop()
+    ev(ws, "document.dispatchEvent(new Event('visibilitychange'))")
+    wait_for(ws, "document.getElementById('aiDot').dataset.state === 'off'", timeout=10, label="Ollama gone")
+    gone = ev(ws, "document.getElementById('aiStatusLine').innerText")
+    check("with Ollama gone the dot goes grey, Ask is off, and the panel says what to do",
+          "isn’t answering" in gone and ev(ws, "document.getElementById('btnAiAsk').disabled") is True, gone)
+    click(ws, "#btnMarkups")
+    check("opening the markups list puts the AI panel away", ev(ws, "document.getElementById('aiRail').hidden") is True)
+    click(ws, "#btnMarkups")
+    shot(ws, "11-ai")
+
+
 def tab_checks(ws):
     """Open in Tabs: each file its own document, with its own pages, name
     and save target, and nothing one tab does reaching into another.
@@ -2473,6 +2622,7 @@ def main():
         launch_checks(ws3)
         markup_checks(ws3)
         surface_checks(ws3)
+        ai_checks(ws3)
     except TimeoutError:
         failed += 1
         print("FAIL  the renderer stopped answering during the tab checks")
