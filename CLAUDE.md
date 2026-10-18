@@ -290,6 +290,12 @@ error that only shows up on 90°/270° pages and is miserable to eyeball.
     `launchctl kickstart -k gui/$(id -u)/com.ollama.ollama` — quitting the
     menu-bar app leaves the server running with the old setting. The
     setenv does not survive a reboot. Never `*`.
+  - **Chrome asks once before a web page may reach localhost**: "access
+    other apps and services on this device" (the `loopback-network`
+    permission). The first request holds until it is answered, so the
+    panel waits for it and says "click Allow" (`localAccess` in ai.js);
+    blocked, it says how to unblock. A localhost page is never asked —
+    and Chrome still reports 'prompt' there, hence the origin check.
   - The browser suite tests the panel against a stand-in Ollama
     (`FakeOllama` in smoke.py), so it needs no model.
 - **A failed save goes to `#saveAlert`, never `setStatus`.** It must stay

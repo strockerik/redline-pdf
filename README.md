@@ -91,6 +91,9 @@ sheet, and saving downloads to the Files app.
    launchctl kickstart -k gui/$(id -u)/com.ollama.ollama
    ```
    The first line has to be run again after a restart of the Mac.
+4. The first time you open the AI panel, Chrome asks whether the site may
+   "access other apps and services on this device". Click **Allow** —
+   that is how it reaches Ollama; nothing leaves the Mac.
 
 Click **AI** in the header. The dot beside it is green when the model is
 ready, amber when Ollama is running without that model, grey when Ollama

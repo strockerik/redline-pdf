@@ -52,11 +52,29 @@ export function saveAiConfig(patch) {
   try { localStorage.setItem(KEY, JSON.stringify(aiConfig)); } catch { /* private mode: settings last the session */ }
 }
 
+/** Whether this page is served from this Mac. Such a page may reach
+ *  Ollama freely; one served from the web may not, until Chrome has asked
+ *  "access other apps and services on this device?" and been told Allow. */
+export const isLocalOrigin = (origin) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin);
+
+/** Chrome's standing answer to that question for this page: a
+ *  PermissionStatus ('granted', 'prompt' or 'denied'), or null where
+ *  nothing has to be asked. On a localhost page Chrome reports 'prompt'
+ *  yet asks nothing, which is why the origin is checked first. */
+export async function localAccess(origin = location.origin) {
+  if (isLocalOrigin(origin) || !navigator.permissions) return null;
+  for (const name of ['loopback-network', 'local-network-access']) {
+    try { return await navigator.permissions.query({ name }); } catch { /* not this browser's name for it */ }
+  }
+  return null;
+}
+
 /** Is Ollama answering, and does it have the model?
- *  → { up, hasModel, models: [names], version } — never throws. */
-export async function aiStatus() {
+ *  → { up, hasModel, models: [names] } — never throws. `timeout` is long
+ *  while Chrome's question is on screen: the request waits for the answer. */
+export async function aiStatus({ timeout = 2500 } = {}) {
   try {
-    const r = await fetch(`${aiConfig.host}/api/tags`, { signal: AbortSignal.timeout(2500) });
+    const r = await fetch(`${aiConfig.host}/api/tags`, { signal: AbortSignal.timeout(timeout) });
     if (!r.ok) return { up: false, reason: `Ollama answered ${r.status}` };
     const { models = [] } = await r.json();
     const names = models.map((m) => m.name);

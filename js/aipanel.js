@@ -9,7 +9,7 @@
  * on this machine. After that it checks when the app starts, every 30
  * seconds while the window is in front, and whenever something fails.
  */
-import { aiConfig, saveAiConfig, aiStatus, chatStream, AI_DEFAULTS } from './ai.js';
+import { aiConfig, saveAiConfig, aiStatus, chatStream, localAccess, AI_DEFAULTS } from './ai.js';
 
 const $ = (id) => document.getElementById(id);
 const POLL_MS = 30000;
@@ -19,6 +19,11 @@ const SLOW_START_MS = 1500;          // no first word by now: the model is being
 // like the documents do.
 const conversation = [];
 let last = null;                     // the most recent status
+// Chrome's permission for this page to reach apps on this Mac (null: none
+// needed), looked up once; and whether its question is on screen now.
+let access;
+let asking = false;
+const ASK_WAIT_MS = 120000;
 let pollTimer = 0;
 let answering = null;                // the AbortController of an answer in progress
 
@@ -64,6 +69,29 @@ function renderStatus() {
 
   const ready = !!(last && last.up && last.hasModel);
   $('btnAiAsk').disabled = !ready || !!answering;
+  // Chrome's own question comes first: until it is answered, nothing else
+  // can be known, and the usual advice about Ollama would be wrong.
+  if (asking) {
+    line.replaceChildren(help([
+      'Chrome is asking whether Redline may reach other apps on this Mac. Click Allow in the box under the address bar.',
+      'That is how it talks to Ollama; nothing leaves this Mac.',
+    ]));
+    return;
+  }
+  if (last && last.reason === 'denied') {
+    line.replaceChildren(help([
+      'Chrome is blocking Redline from reaching apps on this Mac, so it can’t talk to Ollama.',
+      'Click the icon at the left of the address bar, allow access to apps and services on this device, then reload.',
+    ]));
+    return;
+  }
+  if (last && last.reason === 'unanswered') {
+    line.replaceChildren(help([
+      'Chrome’s question about reaching apps on this Mac wasn’t answered.',
+      'Close this panel and open it again to be asked again, and click Allow.',
+    ]));
+    return;
+  }
   if (!last) { line.textContent = 'Checking for Ollama…'; return; }
   if (ready) { line.replaceChildren(); return; }
 
@@ -98,9 +126,24 @@ let checkSeq = 0;
 
 async function check() {
   const seq = ++checkSeq;
-  const s = await aiStatus();
+  if (access === undefined) {
+    access = await localAccess();
+    // Allowed or blocked from Chrome's own settings: look again at once.
+    access?.addEventListener('change', () => check());
+  }
+  const state = access ? access.state : 'granted';
+  if (state === 'denied') {
+    if (seq === checkSeq) { last = { up: false, reason: 'denied' }; setDot(); renderStatus(); }
+    return last;
+  }
+  // The first request from a page on the web is what makes Chrome ask.
+  // It waits for the answer, so this look does too.
+  asking = state === 'prompt';
+  if (asking) renderStatus();
+  const s = await aiStatus({ timeout: asking ? ASK_WAIT_MS : undefined });
   if (seq !== checkSeq) return last;
-  last = s;
+  asking = false;
+  last = !s.up && access && access.state === 'prompt' ? { up: false, reason: 'unanswered' } : s;
   setDot();
   renderStatus();
   return last;
