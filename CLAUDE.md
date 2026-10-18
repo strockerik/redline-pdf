@@ -245,6 +245,10 @@ error that only shows up on 90°/270° pages and is miserable to eyeball.
 - Canvas backing store is at `scale * devicePixelRatio`, clamped to what
   the browser will allocate (`clampBackingScale`); layout stays in
   logical px so the overlay's `pt * currentScale` math is unaffected.
+- **In Fit Pg the wheel turns pages only while the whole page shows.**
+  Zoomed in from there it scrolls the sheet, and only scrolls: reaching
+  the bottom does not turn the page. That is the owner's choice — a
+  scroll that ran on into the next page was tried and taken out.
 - **`state.lastFitMode` is not `state.zoomMode`.** The wheel keys off the
   fit mode the user last *chose*; `zoomMode` flips to `'custom'` the moment
   anything zooms, so reading it there would make one wheel-zoom in Fit W

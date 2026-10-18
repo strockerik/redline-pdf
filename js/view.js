@@ -1058,8 +1058,13 @@ export function installStageGestures(onPageStep) {
   //
   //              plain wheel     Ctrl + wheel
   //   Fit Pg     change page     zoom
+  //    zoomed in scroll          zoom
   //   Fit W      zoom            scroll
   //   zoom mode  zoom            scroll
+  //
+  // In Fit Pg, while the whole page is on screen the wheel turns pages.
+  // Zoomed in from there it scrolls the sheet, and only scrolls: reaching
+  // the bottom does not turn the page — the owner's choice.
   //
   // Cmd + wheel always zooms, whatever the mode.
   //
@@ -1115,6 +1120,17 @@ export function installStageGestures(onPageStep) {
     onPageStep?.(dir);
   };
 
+  /** Fit Pg's plain wheel: a page zoomed in past the stage scrolls; one
+   *  shown whole turns. */
+  const scrollOrStep = (e) => {
+    const zoomedIn = stage.scrollHeight - stage.clientHeight > 0.5
+      || stage.scrollWidth - stage.clientWidth > 0.5;
+    if (!zoomedIn) { stepPages(e); return; }
+    const k = e.deltaMode === 1 ? 16 : 1;
+    stage.scrollTop += e.deltaY * k;
+    stage.scrollLeft += e.deltaX * k;
+  };
+
   stage.addEventListener('wheel', (e) => {
     const pinch = e.ctrlKey && !ctrlHeld;             // trackpad, not the key
     if (e.metaKey || pinch) { e.preventDefault(); zoomBy(e, pinch); return; }
@@ -1136,7 +1152,7 @@ export function installStageGestures(onPageStep) {
 
     if (state.lastFitMode === 'fit-page') {
       e.preventDefault();
-      if (e.ctrlKey) zoomBy(e, false); else stepPages(e);
+      if (e.ctrlKey) zoomBy(e, false); else scrollOrStep(e);
     } else if (e.ctrlKey) {
       // Ctrl+wheel scrolls in Fit W. It has to be done by hand: letting
       // the event through means Chrome takes it as browser zoom, so the

@@ -77,6 +77,7 @@ function buildNoteDom(page, a) {
   // One that shrinks to its text is given no width: the text sets it.
   if (!a.fit) box.style.width = (a.width * scale) + 'px';
   box.style.borderColor = a.color;
+  box.style.color = a.color;          // the width handle's ring (app.css)
 
   const text = document.createElement('div');
   text.className = 'anno-text' + ((a.text || '').length === 0 ? ' placeholder' : '');

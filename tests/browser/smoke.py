@@ -2618,6 +2618,22 @@ def main():
         check("Fit Pg: ctrl+wheel did not also turn the page", sel(ws) == back,
               f"page index {sel(ws)}")
 
+        # Zoomed in from Fit Pg, the wheel scrolls the sheet and nothing
+        # else: not even reaching the bottom turns the page.
+        ev(ws, "(async () => (await import('./js/view.js')).setZoomLevel(3, null, { instant: true }))()", awaitp=True)
+        time.sleep(0.8)
+        STAGE = "(() => { const s = document.getElementById('canvasStage'); return { top: Math.round(s.scrollTop), room: Math.round(s.scrollHeight - s.clientHeight - s.scrollTop) }; })()"
+        ev(ws, "document.getElementById('canvasStage').scrollTop = 0")
+        wheel(ws, 120)
+        st = ev(ws, STAGE)
+        check("Fit Pg zoomed in: the wheel scrolls the sheet instead of turning it", sel(ws) == back and st["top"] > 0, f"{sel(ws)} {st}")
+        ev(ws, "(() => { const s = document.getElementById('canvasStage'); s.scrollTop = s.scrollHeight; })()")
+        wheel(ws, 120)
+        wheel(ws, 120)
+        check("and at the bottom it stays on the page rather than turning it", sel(ws) == back, f"page index {sel(ws)}")
+        click(ws, "#btnFitPage")
+        time.sleep(0.6)
+
         # --- Fit W: wheel zooms, ctrl+wheel scrolls ---
         click(ws, "#btnFitWidth")
         time.sleep(0.6)

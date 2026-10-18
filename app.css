@@ -753,11 +753,17 @@ circle.callout-preview, line.callout-preview{ pointer-events:none; opacity:0.75;
   position:absolute; top:0; right:-7px; width:16px; height:100%;
   cursor:ew-resize; touch-action:none;
 }
+/* The width handle. Nothing is drawn until the note is selected: a grip
+   bar on every note sat on its right border and read as a heavier line on
+   that side. The edge still takes the resize cursor either way. Selected,
+   it is a handle like a shape's — a white dot ringed in the note's colour,
+   on the middle of the edge. */
 .anno-resize::after{
-  content:''; position:absolute; top:50%; right:5px; width:3px; height:24px;
-  background:rgba(0,0,0,0.25); border-radius:2px; transform:translateY(-50%);
+  content:''; position:absolute; top:50%; right:2px; width:8px; height:8px;
+  border-radius:50%; background:#fff; border:2px solid currentColor;
+  transform:translateY(-50%); display:none;
 }
-.anno-box.selected .anno-resize::after{ background:rgba(0,0,0,0.5); }
+.anno-box.selected .anno-resize::after{ display:block; }
 .anno-del{
   position:absolute; top:-12px; right:-12px; width:24px; height:24px;
   border-radius:50%; background:var(--danger); color:#fff; border:2px solid #fff;
@@ -943,7 +949,7 @@ circle.callout-preview, line.callout-preview{ pointer-events:none; opacity:0.75;
   .anno-del svg{ width:13px; height:13px; }
   .anno-del::after{ content:''; position:absolute; inset:-6px; border-radius:50%; }
   .anno-resize{ right:-16px; width:32px; }
-  .anno-resize::after{ right:13px; width:4px; height:32px; }
+  .anno-resize::after{ right:8px; width:12px; height:12px; }
   .tip-handle{ r:11px; stroke:transparent; stroke-width:22px; pointer-events:all; }
   .pt-handle{ r:10px; }
   .ink-hit{ stroke-width:28px; }
