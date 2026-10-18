@@ -370,6 +370,31 @@ let shownPlot = null;
 let plotEventsOn = false;
 let plotRaf = 0, plotTimer = 0, plotDrawnAt = 0;
 
+/** A pdf.js page to read `page`'s words from, without paying for a heavy
+ *  sheet's linework. Asking pdf.js for the text of a CAD sheet means
+ *  parsing every one of its millions of drawing commands: nine seconds
+ *  for one Bernalillo sheet. But compiling a heavy sheet already moves its
+ *  text into a small document of its own (plot.js), so that is read
+ *  instead — under a second. A sheet not compiled yet is compiled now,
+ *  and this waits for it. Null: there is nothing to read. */
+export async function textPageFor(page) {
+  if (!page || page.kind !== 'imported') return null;
+  const src = state.sources.find((s) => s.id === page.sourceId);
+  if (!src) return null;
+  const heavy = heavyRecordFor(page);
+  const plot = heavy ? plotFor(heavy) : null;
+  if (plot) {
+    if (plot.state === 'none') startPlot(plot);
+    for (let waited = 0; plot.state === 'compiling' && waited < 120000; waited += 200) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    if (plot.pjPage) return plot.pjPage;
+    // Compiled, and nothing was left over for a text layer: no words.
+    if (plot.state === 'ready') return null;
+  }
+  return src.pdfjsDoc.getPage(page.sourcePageIndex + 1);
+}
+
 /** The plot record for a heavy page, or null if it has to use a master. */
 function plotFor(heavy) {
   if (heavy.plotFailed || !plotAvailable()) return null;

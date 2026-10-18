@@ -326,6 +326,9 @@ select, input[type=text]{
 }
 .ai-form-row{ display:flex; align-items:center; gap:6px; }
 .ai-form-row .ai-fine{ margin-right:auto; }
+.ai-form-row select{ padding:4px 6px; font-size:12px; max-width:9.5em; }
+/* Which sheets an answer came from: the thing to check it against. */
+.ai-src{ font-family:var(--mono); font-size:10.5px; color:var(--muted); margin:-4px 2px 2px; line-height:1.4; }
 
 /* ---------- Markups list ---------- */
 #markupRail{

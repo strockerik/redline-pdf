@@ -217,7 +217,7 @@
              shows an older line than this file does, the installed app is
              still serving a cached copy. tests/analyze.py checks the two
              numbers agree. -->
-        <span id="buildStamp">rev 0.28 · 2026-10-18 · the AI panel waits for Chrome’s “apps on this device” question</span>
+        <span id="buildStamp">rev 0.29 · 2026-10-18 · the AI reads the document: the passages that answer, by sheet</span>
       </div>
     </div>
 
@@ -264,7 +264,13 @@
         <label for="aiInput" class="sr-only">Ask the local model</label>
         <textarea id="aiInput" rows="3" placeholder="Ask the local model… (⌘Return to send)"></textarea>
         <div class="ai-form-row">
-          <span class="ai-fine">Runs on this Mac. Answers can be wrong.</span>
+          <label for="aiScope" class="sr-only">What the model reads</label>
+          <select id="aiScope" title="What the model reads before it answers">
+            <option value="all">Whole document</option>
+            <option value="page">This page</option>
+            <option value="none">Just chat</option>
+          </select>
+          <span class="ai-fine">On this Mac. Can be wrong.</span>
           <button id="btnAiStop" type="button" hidden>Stop</button>
           <button id="btnAiAsk" type="submit" class="primary">Ask</button>
         </div>

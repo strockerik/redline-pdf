@@ -1520,6 +1520,8 @@ def ai_checks(ws):
         click(ws, "#btnMarkups")
         time.sleep(0.4)
         click(ws, "#btnAi")
+        # Plain chat first: these checks are about the conversation itself.
+        ev(ws, "document.getElementById('aiScope').value = 'none'")
         wait_for(ws, "document.getElementById('aiDot').dataset.state === 'ready'", timeout=10, label="AI ready")
         panel = ev(ws, """({ open: !document.getElementById('aiRail').hidden, markups: !document.getElementById('markupRail').hidden,
           status: document.getElementById('aiStatusLine').innerText, ask: !document.getElementById('btnAiAsk').disabled,
@@ -1532,10 +1534,10 @@ def ai_checks(ws):
         ws.call("Input.insertText", {"text": "What is a revision cloud?"})
         key(ws, "Enter", "Enter", 13, meta=True)
         time.sleep(0.25)
-        mid = ev(ws, """({ text: document.querySelector('#aiLog .ai-msg.bot:last-child').textContent,
+        mid = ev(ws, """({ text: [...document.querySelectorAll('#aiLog .ai-msg.bot')].at(-1).textContent,
           stop: !document.getElementById('btnAiStop').hidden, dot: document.getElementById('aiDot').dataset.state })""")
         wait_for(ws, "document.getElementById('btnAiStop').hidden", timeout=15, label="answer finished")
-        done = ev(ws, "document.querySelector('#aiLog .ai-msg.bot:last-child').textContent")
+        done = ev(ws, "[...document.querySelectorAll('#aiLog .ai-msg.bot')].at(-1).textContent")
         check("⌘Return asks, and the answer arrives a word at a time", 0 < len(mid["text"]) < len(done) and mid["stop"] and mid["dot"] == "busy",
               f"{mid} / {done!r}")
         check("all of it", done == " ".join(FakeOllama.WORDS), repr(done))
@@ -1550,13 +1552,13 @@ def ai_checks(ws):
         click(ws, "#aiInput")
         ws.call("Input.insertText", {"text": "And a delta?"})
         click(ws, "#btnAiAsk")
-        wait_for(ws, "document.querySelector('#aiLog .ai-msg.bot:last-child').textContent.split(' ').length >= 3", timeout=10, label="streaming")
+        wait_for(ws, "[...document.querySelectorAll('#aiLog .ai-msg.bot')].at(-1).textContent.split(' ').length >= 3", timeout=10, label="streaming")
         click(ws, "#btnAiStop")
         time.sleep(0.2)
-        at_stop = ev(ws, "document.querySelector('#aiLog .ai-msg.bot:last-child').textContent")
+        at_stop = ev(ws, "[...document.querySelectorAll('#aiLog .ai-msg.bot')].at(-1).textContent")
         time.sleep(1.0)
-        after = ev(ws, """({ text: document.querySelector('#aiLog .ai-msg.bot:last-child').textContent,
-          cls: document.querySelector('#aiLog .ai-msg.bot:last-child').className, ask: !document.getElementById('btnAiAsk').hidden })""")
+        after = ev(ws, """({ text: [...document.querySelectorAll('#aiLog .ai-msg.bot')].at(-1).textContent,
+          cls: [...document.querySelectorAll('#aiLog .ai-msg.bot')].at(-1).className, ask: !document.getElementById('btnAiAsk').hidden })""")
         check("Stop ends the answer where it is", after["text"] == at_stop and "stopped" in after["cls"] and after["ask"]
               and len(at_stop.split()) < len(FakeOllama.WORDS), str(after))
         follow = next(r[2] for r in reversed(fake.requests) if r[0] == "POST")
@@ -1566,6 +1568,41 @@ def ai_checks(ws):
 
         dirty1 = ev(ws, "(async () => { const { state } = await import('./js/state.js'); const { historyStatus } = await import('./js/history.js'); return [state.dirty, historyStatus().changes]; })()", awaitp=True)
         check("talking to the model changes nothing in the document", dirty1 == dirty0, f"{dirty0} -> {dirty1}")
+
+        # Asked about the document, it is given the passages that bear on
+        # the question, tagged by sheet — and told to keep to them.
+        ev(ws, """(async () => {
+          const tabs = await import('./js/tabs.js'), pages = await import('./js/pages.js');
+          tabs.openDocument();
+          await pages.importPdfBytes(await (await fetch('./tests/browser/fixture.pdf')).arrayBuffer(), 'fixture.pdf');
+        })()""", awaitp=True)
+        time.sleep(1.0)
+        ev(ws, "document.getElementById('aiScope').value = 'all'")
+        click(ws, "#aiInput")
+        ws.call("Input.insertText", {"text": "What does the landscape check page say?"})
+        click(ws, "#btnAiAsk")
+        wait_for(ws, "document.getElementById('btnAiStop').hidden && !!document.querySelector('#aiLog .ai-src')", timeout=20, label="document answer")
+        sent = next(r[2] for r in reversed(fake.requests) if r[0] == "POST")
+        doc = next((m["content"] for m in sent["messages"] if m["role"] == "system" and "Passages" in m["content"]), "")
+        rules = sent["messages"][0]["content"]
+        src = ev(ws, "[...document.querySelectorAll('#aiLog .ai-src')].at(-1).textContent")
+        check("asked about the document, it is sent the passage that answers, tagged with its sheet",
+              "(p. 2) PAGE TWO" in doc and "LANDSCAPE CHECK" in doc, doc[:300])
+        check("best match first", doc.split("\n")[2].startswith("(p. 2)") if len(doc.split("\n")) > 2 else False, doc[:300])
+        check("and told to keep to it, and never to claim it can see the drawings",
+              "Use only that text" in rules and "Never say you can see" in rules, rules[:200])
+        check("the answer says which sheets it came from", src.startswith("Passages from p. 2"), src)
+        check("an answer about a drawing is not a creative one", sent["options"].get("temperature") == 0.2, str(sent["options"]))
+        ev(ws, "document.getElementById('aiScope').value = 'none'")
+        click(ws, "#aiInput")
+        ws.call("Input.insertText", {"text": "Can you see the PDF?"})
+        click(ws, "#btnAiAsk")
+        wait_for(ws, "document.getElementById('btnAiStop').hidden", timeout=20, label="chat answer")
+        chat = next(r[2] for r in reversed(fake.requests) if r[0] == "POST")
+        check("in plain chat it is sent no document, and told it cannot see one",
+              not any("Passages" in m["content"] for m in chat["messages"]) and "NOT been given the open document" in chat["messages"][0]["content"],
+              chat["messages"][0]["content"][:160])
+        ev(ws, "document.getElementById('aiScope').value = 'all'")
 
         fake.models = ["llama3.2:3b"]
         ev(ws, "window.dispatchEvent(new Event('focus')); document.dispatchEvent(new Event('visibilitychange'))")
@@ -2029,6 +2066,9 @@ def main():
         check("main canvas has a backing store", ink["w"] > 0 and ink["h"] > 0, f"{ink['w']}x{ink['h']}")
         check("page actually rasterised (dark pixels present)", ink["dark"] > 500, f"{ink['dark']} dark px")
 
+        # Thumbnails arrive one at a time after the page itself; wait for
+        # them as a person would, rather than catch the rail mid-fill.
+        wait_for(ws, "document.querySelectorAll('#thumbList canvas').length >= 3", timeout=15, label="thumbnails painted")
         thumb_ink = ev(ws, """(() => {
           const cs = [...document.querySelectorAll('#thumbList canvas')];
           return cs.map(c => {

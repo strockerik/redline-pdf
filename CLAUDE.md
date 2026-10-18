@@ -56,6 +56,8 @@ js/chrome.js    the command surface: file menu, properties row, page
                 field, markups list, save chip, save-failure alert
 js/ai.js        the local model: Ollama's HTTP API on this Mac. Networking
                 only — no DOM, no state, no imports
+js/aitext.js    the document as text for the model: blocks, and the
+                passages chosen for a question
 js/aipanel.js   the AI panel: status dot, conversation, settings
 js/main.js      wiring, keyboard, boot
 ```
@@ -296,6 +298,21 @@ error that only shows up on 90°/270° pages and is miserable to eyeball.
     panel waits for it and says "click Allow" (`localAccess` in ai.js);
     blocked, it says how to unblock. A localhost page is never asked —
     and Chrome still reports 'prompt' there, hence the origin check.
+  - **What the model is given decides everything.** Without the document
+    it claimed to see the PDF and invented figures. Given four whole
+    Bernalillo sheets (20,000 characters) it took 20 s and still invented.
+    Given only the passages that match the question, best first, tagged by
+    sheet, ~5,000 characters, it answers in 3–15 s and keeps to them
+    (aitext.js `chooseText`; BM25 scoring, drawing synonyms, repeated
+    legends sent once). Text is built as blocks (`textBlocks`), not
+    full-width rows, which glued a table value to a map label.
+  - **Heavy sheets are read from their compiled text layer**
+    (`textPageFor` in view.js), never through pdf.js's full page: nine
+    seconds for one Bernalillo sheet that way, under one the other.
+  - **Text drawn as linework can't be read.** Civil 3D draws some tables in
+    CAD fonts made of lines: the Bernalillo site data table (400 MW) is
+    invisible to text extraction. The prompt tells the model so, and it
+    says it can't find such figures instead of guessing.
   - The browser suite tests the panel against a stand-in Ollama
     (`FakeOllama` in smoke.py), so it needs no model.
 - **A failed save goes to `#saveAlert`, never `setStatus`.** It must stay

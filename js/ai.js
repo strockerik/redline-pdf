@@ -103,11 +103,11 @@ function body(messages, { options = {}, ...rest }) {
  *  /api/chat sends newline-delimited JSON: each line carries a piece of
  *  the reply in `message.content`, and the last has `done: true`. Pass an
  *  AbortSignal to stop it part way. */
-export async function* chatStream(messages, { signal } = {}) {
+export async function* chatStream(messages, { signal, options } = {}) {
   const r = await fetch(`${aiConfig.host}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: body(messages, { stream: true }),
+    body: body(messages, { stream: true, options }),
     signal,
   });
   if (!r.ok) throw new Error(await failure(r));

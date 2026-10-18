@@ -10,6 +10,8 @@
  * seconds while the window is in front, and whenever something fails.
  */
 import { aiConfig, saveAiConfig, aiStatus, chatStream, localAccess, AI_DEFAULTS } from './ai.js';
+import { chooseText } from './aitext.js';
+import { state } from './state.js';
 
 const $ = (id) => document.getElementById(id);
 const POLL_MS = 30000;
@@ -27,8 +29,32 @@ const ASK_WAIT_MS = 120000;
 let pollTimer = 0;
 let answering = null;                // the AbortController of an answer in progress
 
-const SYSTEM = 'You are the assistant built into Redline, a PDF markup tool used to review civil '
-  + 'engineering drawings. Answer briefly and plainly. If you are not sure, say so.';
+// Without the document the model will still claim to have read it — it
+// told the owner "Yes, I can see the Bernalillo PDF" and invented an
+// acreage. So each mode says plainly what it has and has not been given.
+const SYSTEM_NONE = 'You are the assistant in Redline, a PDF markup tool for reviewing civil engineering '
+  + 'drawings. You have NOT been given the open document or any drawing, and cannot see them. If asked '
+  + 'about the document, say you can’t see it and suggest choosing “Whole document”. Be brief.';
+
+const SYSTEM_DOC = [
+  'You answer questions about a set of PDF drawings, using only the text taken from them, given below.',
+  'That text was pulled out of the drawings by position, so labels, notes and tables are broken up and may be out of order.',
+  'Rules:',
+  '- Use only that text. Never say you can see the drawings or images; you have only their text.',
+  '- Quote names and numbers exactly as written, with their units, and name the sheet like (p. 3).',
+  '- Answer with what the passages do say, even if it is only part of the answer, and name the sheet.',
+  '- Labels are often missing from the text, because some words on drawings are drawn as lines. If a figure seems to be the answer but its label is missing, give it and say its label isn’t readable.',
+  '- Only if nothing in the passages bears on the question, say you can’t find it in the text of these sheets.',
+  '- Be brief: answer first, in a sentence or two.',
+].join('\n');
+
+// What fits: the model's context, less room for the answer and the
+// conversation, at about three characters to a token — drawings are dense
+// with numbers, which tokenise worse than prose.
+const ANSWER_ROOM = 1400;              // tokens
+const CHARS_PER_TOKEN = 3;
+const HISTORY_TURNS = 4;               // messages of the conversation sent back each time
+const EXCERPT_CHARS = 5000;            // the most of the document sent with one question
 
 // ============================================================
 // Status
@@ -177,22 +203,72 @@ function setAnswering(controller) {
   renderStatus();
 }
 
+/** The messages for one question: the rules, the document's text if it
+ *  is to be read, the last few turns, and the question. */
+async function prompt(question, scope, signal) {
+  const history = conversation.slice(-HISTORY_TURNS);
+  if (scope === 'none' || !state.pages.length) {
+    return { messages: [{ role: 'system', content: SYSTEM_NONE }, ...history, { role: 'user', content: question }], source: null };
+  }
+  // Short on purpose: well under what the context could take. The excerpt
+  // that holds the answer is what matters, and every character more is
+  // time before the first word and room for the model to wander.
+  const used = [SYSTEM_DOC, question, ...history.map((m) => m.content)].join('').length;
+  const budget = Math.max(1500, Math.min(EXCERPT_CHARS, (aiConfig.numCtx - ANSWER_ROOM) * CHARS_PER_TOKEN - used));
+  const chosen = await chooseText(question, { scope, budget });
+  if (signal.aborted) throw new DOMException('Stopped', 'AbortError');
+  // Best match first, each passage tagged with its sheet.
+  const text = chosen.passages.map((p) => `(p. ${p.n}) ${p.text.replace(/\n+/g, ' / ')}`).join('\n');
+  return {
+    messages: [
+      { role: 'system', content: SYSTEM_DOC },
+      { role: 'system', content: `Document: ${state.docName}, ${state.pages.length} pages. Passages that may bear on the question:\n\n${text || '(No readable text found for this question.)'}` },
+      ...history,
+      { role: 'user', content: question },
+    ],
+    source: chosen,
+  };
+}
+
+/** Which sheets an answer was drawn from — what to check it against. */
+function sourceLine(src) {
+  const parts = [];
+  parts.push(src.pages.length ? `Passages from p. ${src.pages.join(', ')}` : 'Nothing in the text matched');
+  if (src.empty.length) parts.push(`no text on p. ${src.empty.join(', ')}`);
+  return parts.join(' · ');
+}
+
 async function ask(question) {
   if (answering || !question.trim()) return;
-  conversation.push({ role: 'user', content: question });
+  const scope = $('aiScope').value;
   addMessage('user', question);
-  const reply = addMessage('bot waiting', 'Thinking…');
-  // The first answer after Ollama has been idle loads the model into
-  // memory, which takes several seconds. Say so rather than look stuck.
-  const slow = setTimeout(() => {
-    if (reply.classList.contains('waiting')) reply.textContent = 'Loading the model into memory — the first answer takes a few seconds…';
-  }, SLOW_START_MS);
+  const reply = addMessage('bot waiting', scope === 'none' ? 'Thinking…' : 'Reading the sheets…');
+  let slow = 0;
 
   const controller = new AbortController();
   setAnswering(controller);
   let text = '';
   try {
-    for await (const piece of chatStream([{ role: 'system', content: SYSTEM }, ...conversation], { signal: controller.signal })) {
+    const { messages, source } = await prompt(question, scope, controller.signal);
+    if (source) {
+      const note = document.createElement('div');
+      note.className = 'ai-src';
+      note.textContent = sourceLine(source);
+      reply.after(note);
+    }
+    if (reply.classList.contains('waiting')) reply.textContent = 'Thinking…';
+    // The first answer after Ollama has been idle loads the model into
+    // memory, which takes several seconds. Say so rather than look stuck —
+    // timed from here, not from the click: reading a heavy sheet for the
+    // first time takes a while of its own, and is not the model loading.
+    slow = setTimeout(() => {
+      if (reply.classList.contains('waiting')) reply.textContent = 'Loading the model into memory — the first answer takes a few seconds…';
+    }, SLOW_START_MS);
+    conversation.push({ role: 'user', content: question });
+    // Lower than the default: an answer about a drawing should be the same
+    // answer each time, not a creative one.
+    const options = scope === 'none' ? undefined : { temperature: 0.2 };
+    for await (const piece of chatStream(messages, { signal: controller.signal, options })) {
       if (!text) reply.classList.remove('waiting');
       text += piece;
       reply.textContent = text;
@@ -204,10 +280,10 @@ async function ask(question) {
       reply.classList.remove('waiting');
       reply.classList.add('stopped');
       reply.textContent = text;
-      conversation.push({ role: 'assistant', content: text });
+      if (conversation.at(-1)?.role === 'user') conversation.push({ role: 'assistant', content: text });
     } else {
       // The question goes back too: it was never answered.
-      conversation.pop();
+      if (conversation.at(-1)?.role === 'user' && conversation.at(-1).content === question) conversation.pop();
       reply.className = 'ai-msg err';
       reply.textContent = `Couldn’t get an answer: ${err && err.message || err}`;
       check();
@@ -258,7 +334,8 @@ export function aiPanelOpened() {
   startPolling();
   check();
   if (!$('aiLog').children.length) {
-    addMessage('bot hint', 'Ask the local model anything. It can’t see the open document yet — that comes next.');
+    addMessage('bot hint', 'Ask about the open document. The model reads its text — not its linework, so a table '
+      + 'drawn in a CAD font can’t be read — and says which sheets it used. Check anything that matters.');
   }
   setTimeout(() => $('aiInput').focus(), 0);
 }
