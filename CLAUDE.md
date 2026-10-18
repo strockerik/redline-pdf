@@ -178,12 +178,13 @@ error that only shows up on 90°/270° pages and is miserable to eyeball.
 - **Bump `CACHE` in `sw.js` on every deploy, and the build stamp with
   it.** Otherwise the installed app keeps serving the previous version
   from cache. The stamp is the `#buildStamp` line in index.html —
-  `rev 0.N · date · what changed`, the same number as CACHE
-  (`redline-v0.N`) — and is what the user compares against the repo to see
+  `rev M.N · date · what changed`, the same number as CACHE
+  (`redline-vM.N`) — and is what the user compares against the repo to see
   whether a running copy is current. `tests/analyze.py` fails if the two
-  disagree. **Everything so far is rev 0**: a deploy takes 0.21 to 0.22.
-  The number before the point is the owner's to change; never bump it
-  unasked. (Builds up to 0.21 were stamped as bare integers, "rev 21".)
+  disagree. **The owner declared rev 1.0 on 2026-10-18**: a deploy now
+  takes 1.0 to 1.1, 1.1 to 1.2. The number before the point is the
+  owner's to change; never bump it unasked. (Rev 0 ran 0.21–0.35; builds
+  before that were stamped as bare integers, "rev 21".)
 - **The worker fills its cache with fresh fetches, and checks what came
   back** (`precache()` in sw.js). Don't go back to `cache.addAll`: it is
   served from the HTTP cache and the CDN, which for ten minutes after a

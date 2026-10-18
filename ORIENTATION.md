@@ -59,7 +59,7 @@ Each was chosen, usually after the alternative failed.
 | Every path starts with `./` | Pages serves from `/redline-pdf/`. An absolute path works locally and 404s in production. |
 | Thumbnails render one at a time | Concurrent pdf.js renders were flaky. The loop awaits on purpose. |
 | The AI only talks to `localhost:11434` | It is optional, and local by design (Ollama). `ai.js` imports nothing, and nothing in the page, coordinate or export code imports it. |
-| Version is `rev 0.31`, not semver | `rev 0.N` appears both in `#buildStamp` (index.html) and in `CACHE` (sw.js), and is bumped on every deploy. The owner decides when it becomes 1.0. |
+| Version is `rev 1.0`, not semver | `rev M.N` appears both in `#buildStamp` (index.html) and in `CACHE` (sw.js), and N is bumped on every deploy. M is the owner's to change; it became 1 on 2026-10-18. |
 | The plot renderer draws joins round, converts CMYK naively, and puts all text above the linework | It is a viewer's approximation, chosen for speed. Export never uses it. |
 
 ## 3. File map

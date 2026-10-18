@@ -255,7 +255,7 @@ def check_build_stamp():
     stamp = re.search(r'id="buildStamp">\s*rev (\d+\.\d+) · (\d{4})-(\d{2})-(\d{2}) · \S', read("index.html"))
     if not stamp:
         fail("index.html carries a build stamp",
-             'expected <span id="buildStamp">rev 0.N · YYYY-MM-DD · what changed</span>')
+             'expected <span id="buildStamp">rev M.N · YYYY-MM-DD · what changed</span>')
         return
     rev, y, mo, d = stamp.groups()
     try:

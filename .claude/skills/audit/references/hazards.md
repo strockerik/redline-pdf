@@ -174,8 +174,8 @@ undo cannot reach — closing a tab or the window with unsaved work.
 - **Bump `CACHE` in `sw.js`** whenever a precached file changes, or the
   installed app serves the previous version out of cache indefinitely.
 - **Bump the build stamp with it.** `#buildStamp` in index.html shows
-  `rev 0.N · date · what changed` in the footer, the same number CACHE
-  carries. A deploy raises N by one; the 0 changes only on the owner's word.
+  `rev M.N · date · what changed` in the footer, the same number CACHE
+  carries. A deploy raises N by one; M changes only on the owner's word.
   It is how a stale installed copy is told from a current one, so a stamp
   left behind is worse than none.
 - **A cache must contain the build it is named for.** Rev 0.24's worker
