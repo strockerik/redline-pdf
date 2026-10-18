@@ -26,7 +26,7 @@ and it works with no network connection once installed.
   before you commit; the leader meets its note on a short level jog, the
   way a drafter draws one. Notes get a white fill so they read over dense
   linework, and can shrink to the width of their text; ⌘Return finishes
-  one without reaching for the mouse, ⌘D duplicates it, ⌘C / ⌘V carries it
+  one and puts it down without reaching for the mouse, ⌘D duplicates it, ⌘C / ⌘V carries it
   to another sheet.
 - **Undo** — ⌘Z takes back anything: a stroke, a move, an edit, a rotated
   or deleted page, even Clear All. Nothing asks "are you sure?".
@@ -108,7 +108,7 @@ isn't answering — and the panel says what to do in each case.
 | ⌘S | Save over the opened file |
 | ⇧⌘S | Save As |
 | ⌘Z / ⇧⌘Z | Undo / redo |
-| ⌘Return | Finish typing a note |
+| ⌘Return | Finish a note and deselect it |
 | ⌘D | Duplicate the selected markup |
 | ⌘C / ⌘V | Copy the selected markup / paste it on this page |
 | ⌘+ / ⌘− | Zoom in / out |

@@ -1063,7 +1063,11 @@ def surface_checks(ws):
     check("⌘Return finishes the note without a click", note["text"] == "Fit me"
           and ev(ws, "!!document.querySelector('.anno-box.editing')") is False
           and ev(ws, "document.activeElement.classList.contains('anno-text')") is False, str(note))
-    check("and leaves the note selected", s["tool"] == "select" and s["sel"] == note["id"], f"{s['tool']}, sel {s['sel']}")
+    check("and puts it down altogether: nothing selected, no handles, the properties row back to Select",
+          s["tool"] == "select" and s["sel"] is None and ev(ws, "!!document.querySelector('.anno-box.selected')") is False
+          and ev(ws, "[...document.querySelectorAll('.tip-handle')].every((n) => n.style.display === 'none')") is True
+          and s["label"] == "Select", f"{s['tool']}, sel {s['sel']}, {s['label']}")
+    tap(*to_client(note["x"] + 8, note["y"] + 8))      # pick it up again to style it
     check("a note starts at a fixed width, with the option to shrink it", note["width"] == 170 and note["fit"] is False
           and shown("fitGrp") and ev(ws, "document.getElementById('fitToggle').checked") is False)
 
@@ -1089,6 +1093,7 @@ def surface_checks(ws):
     check("it grows with the text as it is typed, on one line", grown_live["w"] > tight["w"] * 2 and grown_live["h"] == tight["h"],
           f"{tight} -> {grown_live}")
     check("and keeps up in the model", abs(grown["width"] - grown_live["w"] / scale) < 0.5 and grown["fit"] is True)
+    tap(nx, ny)                                       # ⌘Return put it down; pick it up again
     rz = ev(ws, "(r => ({x: r.left + r.width / 2, y: r.top + r.height / 2}))(document.querySelector('.anno-box.selected .anno-resize').getBoundingClientRect())")
     drag((rz["x"], rz["y"]), (rz["x"] - 60, rz["y"]))
     sized = next(a for a in st()["annos"] if a["id"] == note["id"])
@@ -1130,6 +1135,7 @@ def surface_checks(ws):
     key(ws, "Enter", "Enter", 13, meta=True)
     dr = st()["annos"][-1]
     check("with the option on, dragging out a box still gives one that hugs its text", dr["text"] == "dragged" and dr["fit"] is True and dr["width"] < 80, str(dr))
+    tap(*to_client(dr["x"] + 5, dr["y"] + 5))          # select it, to turn the option off with it
 
     click(ws, "#fitToggle")
     check("until the option is turned off", ev(ws, "(async()=>(await import('./js/state.js')).state.currentFit)()", awaitp=True) is False

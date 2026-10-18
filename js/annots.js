@@ -241,12 +241,15 @@ function wireNoteInteractions(page, a, els) {
   });
 
   // ⌘Return finishes the note from the keyboard, without reaching for
-  // the mouse. Return alone is a new line; Esc also deselects the note.
+  // the mouse, and puts it down altogether: its text is kept and it is
+  // deselected, handles and all — what a click on bare page does. Return
+  // alone is a new line.
   text.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       e.stopPropagation();
       text.blur();
+      deselectAnnotation();
     }
   });
 
